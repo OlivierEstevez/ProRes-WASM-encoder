@@ -59,8 +59,11 @@
       flex-wrap: wrap;
     }
     .canvas-wrapper {
-      flex: 1;
-      min-width: 300px;
+      width: 100%;
+      height: 360px;
+      max-width: 100%;
+      display: flex;
+      flex-direction: column;
     }
     .canvas-wrapper h3 {
       margin: 0 0 10px 0;
@@ -72,6 +75,19 @@
       background: #000;
       border-radius: 8px;
       border: 1px solid #333;
+    }
+    #previewContainer {
+      width: 100%;
+      flex: 1;
+      min-height: 0;
+    }
+    #previewContainer canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
     }
     .buttons {
       display: flex;
@@ -220,7 +236,7 @@
   <div class="canvas-container">
     <div class="canvas-wrapper">
       <h3>Preview</h3>
-      <canvas id="preview" width="640" height="360"></canvas>
+      <div id="previewContainer"></div>
     </div>
   </div>
 
@@ -240,6 +256,7 @@
 
   <div class="log" id="log"></div>
 
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
   <script type="module">
     let createProResEncoder = null;
     let moduleLoadError = null;
@@ -276,64 +293,79 @@
       }
     })();
 
-    // Animation function for demo content
-    function drawFrame(ctx, width, height, frame, totalFrames) {
-      const t = frame / totalFrames;
+    // p5.js sketch for demo content
+    let p5Instance = null;
+    let currentFrame = 0;
+    let currentTotalFrames = 1;
 
-      // Background gradient
-      const gradient = ctx.createLinearGradient(0, 0, width, height);
-      gradient.addColorStop(0, `hsl(${(t * 360) % 360}, 70%, 20%)`);
-      gradient.addColorStop(1, `hsl(${(t * 360 + 180) % 360}, 70%, 10%)`);
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, 0, width, height);
+    const initP5 = (width, height) => {
+      const sketch = (p) => {
+        p.setup = () => {
+          p.createCanvas(width, height).parent('previewContainer');
+          p.pixelDensity(1);
+          p.noLoop();
+        };
 
-      // Animated circles
-      for (let i = 0; i < 5; i++) {
-        const angle = t * Math.PI * 2 + (i / 5) * Math.PI * 2;
-        const radius = Math.min(width, height) * 0.3;
-        const x = width / 2 + Math.cos(angle) * radius * 0.5;
-        const y = height / 2 + Math.sin(angle) * radius * 0.5;
-        const size = 30 + Math.sin(t * Math.PI * 4 + i) * 20;
+        p.draw = () => {
+          const t = currentTotalFrames > 0 ? currentFrame / currentTotalFrames : 0;
+          p.colorMode(p.HSL, 360, 100, 100, 1);
+          const grad = p.drawingContext.createLinearGradient(0, 0, width, height);
+          grad.addColorStop(0, `hsl(${(t * 360) % 360}, 70%, 20%)`);
+          grad.addColorStop(1, `hsl(${(t * 360 + 180) % 360}, 70%, 10%)`);
+          p.drawingContext.fillStyle = grad;
+          p.drawingContext.fillRect(0, 0, width, height);
 
-        ctx.beginPath();
-        ctx.arc(x, y, size, 0, Math.PI * 2);
-        ctx.fillStyle = `hsla(${(t * 360 + i * 60) % 360}, 80%, 60%, 0.8)`;
-        ctx.fill();
+          for (let i = 0; i < 10; i++) {
+            const angle = t * Math.PI * 2 + (i / 10) * Math.PI * 2;
+            const radius = Math.min(width, height) * 0.35;
+            const x = width / 2 + Math.cos(angle) * radius * 0.6;
+            const y = height / 2 + Math.sin(angle) * radius * 0.6;
+            const size = 24 + Math.sin(t * Math.PI * 4 + i) * 18;
+            p.noStroke();
+            p.fill((t * 360 + i * 36) % 360, 80, 60, 0.85);
+            p.circle(x, y, size);
+          }
+
+          p.push();
+          p.translate(width / 2, height / 2);
+          p.rotate(t * Math.PI * 2.5);
+          p.noStroke();
+          p.fill(0, 0, 100, 0.7);
+          p.beginShape();
+          for (let i = 0; i < 6; i++) {
+            const angle = (i / 6) * Math.PI * 2;
+            const r = 70 + Math.sin(t * Math.PI * 6) * 25;
+            p.vertex(Math.cos(angle) * r, Math.sin(angle) * r);
+          }
+          p.endShape(p.CLOSE);
+          p.pop();
+
+          p.colorMode(p.RGB, 255);
+          p.fill(255);
+          p.textSize(16);
+          p.textFont('monospace');
+          p.text(`Frame: ${currentFrame + 1} / ${currentTotalFrames}`, 20, 28);
+          p.text(`Time: ${(currentFrame / 30).toFixed(2)}s`, 20, 48);
+        };
+      };
+
+      p5Instance = new window.p5(sketch);
+    };
+
+    const ensureP5 = (width, height) => {
+      if (!p5Instance) {
+        initP5(width, height);
+        return;
       }
-
-      // Central spinning shape
-      ctx.save();
-      ctx.translate(width / 2, height / 2);
-      ctx.rotate(t * Math.PI * 4);
-
-      ctx.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const angle = (i / 6) * Math.PI * 2;
-        const r = 60 + Math.sin(t * Math.PI * 6) * 20;
-        const px = Math.cos(angle) * r;
-        const py = Math.sin(angle) * r;
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
+      if (p5Instance.width !== width || p5Instance.height !== height) {
+        p5Instance.resizeCanvas(width, height);
       }
-      ctx.closePath();
-      ctx.fillStyle = `hsla(${t * 360}, 90%, 70%, 0.9)`;
-      ctx.fill();
-      ctx.restore();
-
-      // Frame counter
-      ctx.fillStyle = '#fff';
-      ctx.font = '16px monospace';
-      ctx.fillText(`Frame: ${frame + 1} / ${totalFrames}`, 20, 30);
-      ctx.fillText(`Time: ${(frame / 30).toFixed(2)}s`, 20, 50);
-    }
+    };
 
     // Main app
     let encoder = null;
     let movData = null;
     let isRecording = false;
-
-    const previewCanvas = document.getElementById('preview');
-    const previewCtx = previewCanvas.getContext('2d');
 
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
@@ -342,10 +374,10 @@
     // Update preview canvas size based on resolution
     document.getElementById('resolution').addEventListener('change', (e) => {
       const [w, h] = e.target.value.split('x').map(Number);
-      // Keep preview aspect ratio but scale down
-      const scale = Math.min(640 / w, 360 / h);
-      previewCanvas.width = w * scale;
-      previewCanvas.height = h * scale;
+      ensureP5(w, h);
+      currentFrame = 0;
+      currentTotalFrames = 1;
+      p5Instance.redraw();
     });
 
     startBtn.addEventListener('click', async () => {
@@ -372,11 +404,8 @@
         downloadBtn.disabled = true;
         movData = null;
 
-        // Create offscreen canvas for encoding
-        const encodeCanvas = document.createElement('canvas');
-        encodeCanvas.width = width;
-        encodeCanvas.height = height;
-        const encodeCtx = encodeCanvas.getContext('2d');
+        ensureP5(width, height);
+        currentTotalFrames = totalFrames;
 
         // Initialize encoder
         encoder = await createProResEncoder();
@@ -394,13 +423,9 @@
         setStatus('Encoding...', 'encoding');
 
         for (let frame = 0; frame < totalFrames && isRecording; frame++) {
-          // Draw frame
-          drawFrame(encodeCtx, width, height, frame, totalFrames);
-
-          // Also draw to preview (scaled)
-          previewCtx.drawImage(encodeCanvas, 0, 0, previewCanvas.width, previewCanvas.height);
-
-          encoder.addFrameFromCanvas(encodeCanvas);
+          currentFrame = frame;
+          p5Instance.redraw();
+          encoder.addFrameFromCanvas(p5Instance.canvas);
 
           // Update progress
           const progress = ((frame + 1) / totalFrames) * 100;
