@@ -92,7 +92,10 @@ void* prores_wasm_create(
         ctx->yuv_buffer_size = width * height * (profile >= 4 ? 4 : 3) * sizeof(uint16_t);
     } else {
         /* 4:2:2 */
-        ctx->yuv_buffer_size = width * height * 2 * sizeof(uint16_t);
+        size_t chroma_width = (size_t)(width + 1) / 2;
+        size_t y_size = (size_t)width * height;
+        size_t c_size = chroma_width * height;
+        ctx->yuv_buffer_size = (y_size + c_size * 2) * sizeof(uint16_t);
     }
     ctx->yuv_buffer = (uint16_t*)malloc(ctx->yuv_buffer_size);
     if (!ctx->yuv_buffer) {
@@ -247,7 +250,10 @@ size_t prores_wasm_get_yuv_buffer_size(int width, int height, int profile)
         return (size_t)width * height * 4 * sizeof(uint16_t);
     } else {
         /* 4:2:2 */
-        return (size_t)width * height * 2 * sizeof(uint16_t);
+        size_t chroma_width = (size_t)(width + 1) / 2;
+        size_t y_size = (size_t)width * height;
+        size_t c_size = chroma_width * height;
+        return (y_size + c_size * 2) * sizeof(uint16_t);
     }
 }
 

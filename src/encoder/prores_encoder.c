@@ -103,6 +103,8 @@ struct ProResEncoderContext {
     ProResEncoderConfig config;
 
     /* Derived values */
+    int padded_width;        /* Width padded to macroblock */
+    int padded_height;       /* Height padded to macroblock */
     int mb_width;            /* Width in macroblocks */
     int mb_height;           /* Height in macroblocks */
     int num_slices;          /* Total number of slices */
@@ -166,20 +168,19 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
         return NULL;
     }
 
-    /* Width and height must be multiples of 16 for macroblock alignment */
-    if (config->width % 16 != 0 || config->height % 16 != 0) {
-        return NULL;
-    }
-
     ctx = (ProResEncoderContext*)calloc(1, sizeof(ProResEncoderContext));
     if (!ctx) return NULL;
 
     /* Copy configuration */
     ctx->config = *config;
 
+    /* Calculate padded dimensions for macroblock alignment */
+    ctx->padded_width = (config->width + MB_SIZE - 1) & ~(MB_SIZE - 1);
+    ctx->padded_height = (config->height + MB_SIZE - 1) & ~(MB_SIZE - 1);
+
     /* Calculate dimensions */
-    ctx->mb_width = config->width / MB_SIZE;
-    ctx->mb_height = config->height / MB_SIZE;
+    ctx->mb_width = ctx->padded_width / MB_SIZE;
+    ctx->mb_height = ctx->padded_height / MB_SIZE;
 
     /* Slice dimensions: use 8 MBs per slice width (log2 = 3), 1 MB per slice height (log2 = 0)
      * This matches FFmpeg's default and avoids "unsupported slice resolution" errors */
@@ -201,21 +202,25 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
     /* Copy quantization matrix */
     memcpy(ctx->quant_matrix, get_quant_matrix(config->profile), 64);
 
-    /* Allocate plane buffers (16-bit for 10-bit data) */
-    plane_size = config->width * config->height * sizeof(int16_t);
+    /* Allocate plane buffers (16-bit for 10-bit data), using padded sizes */
+    plane_size = ctx->padded_width * ctx->padded_height * sizeof(int16_t);
 
     ctx->y_plane = (int16_t*)malloc(plane_size);
-    ctx->u_plane = (int16_t*)malloc(is_444_profile(config->profile) ? plane_size : plane_size / 2);
-    ctx->v_plane = (int16_t*)malloc(is_444_profile(config->profile) ? plane_size : plane_size / 2);
-
     if (is_444_profile(config->profile)) {
+        ctx->u_plane = (int16_t*)malloc(plane_size);
+        ctx->v_plane = (int16_t*)malloc(plane_size);
         ctx->a_plane = (int16_t*)malloc(plane_size);
+    } else {
+        int chroma_width = ctx->padded_width / 2;
+        int chroma_size = chroma_width * ctx->padded_height * sizeof(int16_t);
+        ctx->u_plane = (int16_t*)malloc(chroma_size);
+        ctx->v_plane = (int16_t*)malloc(chroma_size);
     }
 
     ctx->dct_block = (int16_t*)malloc(64 * 4 * sizeof(int16_t));  /* 4 blocks per macroblock minimum */
 
     /* Output buffer - estimate based on bitrate */
-    ctx->output_capacity = (size_t)(config->width * config->height * profile_bpp[config->profile] / 8);
+    ctx->output_capacity = (size_t)(ctx->padded_width * ctx->padded_height * profile_bpp[config->profile] / 8);
     ctx->output_capacity += 1024;  /* Header overhead */
     ctx->output_buf = (uint8_t*)malloc(ctx->output_capacity);
 
@@ -468,8 +473,8 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
                 int bx = pixel_x + block_x * 8;
                 int by = pixel_y + block_y * 8;
 
-                dct_block(ctx->y_plane + by * ctx->config.width + bx,
-                          ctx->config.width,
+                dct_block(ctx->y_plane + by * ctx->padded_width + bx,
+                          ctx->padded_width,
                           luma_blocks[luma_block_count]);
                 luma_block_count++;
             }
@@ -501,14 +506,14 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
                     int bx = pixel_x + block_x * 8;
                     int by = pixel_y + block_y * 8;
 
-                    dct_block(ctx->u_plane + by * ctx->config.width + bx,
-                              ctx->config.width,
+                    dct_block(ctx->u_plane + by * ctx->padded_width + bx,
+                              ctx->padded_width,
                               u_blocks[chroma_block_count]);
                     chroma_block_count++;
                 }
             }
         } else {
-            int chroma_width = ctx->config.width / 2;
+            int chroma_width = ctx->padded_width / 2;
             for (block_y = 0; block_y < 2; block_y++) {
                 int bx = pixel_x / 2;
                 int by = pixel_y + block_y * 8;
@@ -547,14 +552,14 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
                     int bx = pixel_x + block_x * 8;
                     int by = pixel_y + block_y * 8;
 
-                    dct_block(ctx->v_plane + by * ctx->config.width + bx,
-                              ctx->config.width,
+                    dct_block(ctx->v_plane + by * ctx->padded_width + bx,
+                              ctx->padded_width,
                               v_blocks[v_block_count]);
                     v_block_count++;
                 }
             }
         } else {
-            int chroma_width = ctx->config.width / 2;
+            int chroma_width = ctx->padded_width / 2;
             for (block_y = 0; block_y < 2; block_y++) {
                 int bx = pixel_x / 2;
                 int by = pixel_y + block_y * 8;
@@ -642,6 +647,23 @@ static int write_picture_header(ProResEncoderContext* ctx, uint8_t* buf)
     return pic_hdr_size;
 }
 
+static void copy_pad_plane(const uint16_t* src, int src_w, int src_h,
+                           int dst_w, int dst_h, int16_t* dst)
+{
+    for (int y = 0; y < dst_h; y++) {
+        int src_y = (y < src_h) ? y : (src_h - 1);
+        const uint16_t* src_row = src + src_y * src_w;
+        int16_t* dst_row = dst + y * dst_w;
+        for (int x = 0; x < src_w; x++) {
+            dst_row[x] = (int16_t)src_row[x];
+        }
+        uint16_t pad = src_row[src_w - 1];
+        for (int x = src_w; x < dst_w; x++) {
+            dst_row[x] = (int16_t)pad;
+        }
+    }
+}
+
 int prores_encoder_encode_frame(
     ProResEncoderContext* ctx,
     const uint16_t* yuv_data,
@@ -656,35 +678,43 @@ int prores_encoder_encode_frame(
         return -1;
     }
 
-    /* Copy input data to internal buffers */
+    /* Copy input data to internal buffers with padding */
     int plane_size = ctx->config.width * ctx->config.height;
     int is_444 = is_444_profile(ctx->config.profile);
 
     /* Y plane */
-    memcpy(ctx->y_plane, yuv_data, plane_size * sizeof(int16_t));
+    copy_pad_plane(yuv_data, ctx->config.width, ctx->config.height,
+                   ctx->padded_width, ctx->padded_height, ctx->y_plane);
     yuv_data += plane_size;
 
     if (is_444) {
         /* U plane (full resolution) */
-        memcpy(ctx->u_plane, yuv_data, plane_size * sizeof(int16_t));
+        copy_pad_plane(yuv_data, ctx->config.width, ctx->config.height,
+                       ctx->padded_width, ctx->padded_height, ctx->u_plane);
         yuv_data += plane_size;
 
         /* V plane (full resolution) */
-        memcpy(ctx->v_plane, yuv_data, plane_size * sizeof(int16_t));
+        copy_pad_plane(yuv_data, ctx->config.width, ctx->config.height,
+                       ctx->padded_width, ctx->padded_height, ctx->v_plane);
         yuv_data += plane_size;
 
         /* Alpha plane if present */
         if (ctx->a_plane && ctx->config.profile >= PRORES_PROFILE_4444) {
-            memcpy(ctx->a_plane, yuv_data, plane_size * sizeof(int16_t));
+            copy_pad_plane(yuv_data, ctx->config.width, ctx->config.height,
+                           ctx->padded_width, ctx->padded_height, ctx->a_plane);
         }
     } else {
         /* U plane (half horizontal resolution) */
-        int chroma_size = (ctx->config.width / 2) * ctx->config.height;
-        memcpy(ctx->u_plane, yuv_data, chroma_size * sizeof(int16_t));
+        int src_chroma_width = (ctx->config.width + 1) / 2;
+        int dst_chroma_width = ctx->padded_width / 2;
+        int chroma_size = src_chroma_width * ctx->config.height;
+        copy_pad_plane(yuv_data, src_chroma_width, ctx->config.height,
+                       dst_chroma_width, ctx->padded_height, ctx->u_plane);
         yuv_data += chroma_size;
 
         /* V plane (half horizontal resolution) */
-        memcpy(ctx->v_plane, yuv_data, chroma_size * sizeof(int16_t));
+        copy_pad_plane(yuv_data, src_chroma_width, ctx->config.height,
+                       dst_chroma_width, ctx->padded_height, ctx->v_plane);
     }
 
     /* Write frame header directly to buffer */
@@ -799,7 +829,7 @@ void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
 {
     int x, y;
     int plane_size = width * height;
-    int chroma_width = width / 2;
+    int chroma_width = (width + 1) / 2;
 
     uint16_t* y_plane = yuv;
     uint16_t* u_plane = yuv + plane_size;
