@@ -1,0 +1,110 @@
+/**
+ * ProRes WASM Encoder TypeScript Declarations
+ */
+
+/**
+ * ProRes profile constants
+ */
+export declare const ProResProfile: {
+  readonly PROXY: 0;
+  readonly LT: 1;
+  readonly STANDARD: 2;
+  readonly HQ: 3;
+  readonly P4444: 4;
+  readonly P4444XQ: 5;
+};
+
+export type ProResProfileType = typeof ProResProfile[keyof typeof ProResProfile];
+
+/**
+ * Profile display names
+ */
+export declare const ProfileNames: {
+  readonly [key in ProResProfileType]: string;
+};
+
+/**
+ * Encoder initialization options
+ */
+export interface ProResEncoderOptions {
+  /** Frame width (must be multiple of 16) */
+  width: number;
+  /** Frame height (must be multiple of 16) */
+  height: number;
+  /** Frame rate numerator (default: 30) */
+  frameRateNum?: number;
+  /** Frame rate denominator (default: 1) */
+  frameRateDen?: number;
+  /** ProRes profile (default: HQ) */
+  profile?: ProResProfileType;
+  /** Quality 0-100 (default: 85) */
+  quality?: number;
+}
+
+/**
+ * ProRes Encoder class
+ */
+export declare class ProResEncoder {
+  /** Number of frames encoded */
+  readonly frameCount: number;
+  /** Encoder width */
+  readonly width: number;
+  /** Encoder height */
+  readonly height: number;
+  /** Whether encoder is initialized */
+  readonly initialized: boolean;
+
+  /**
+   * Initialize the encoder with given options
+   */
+  initialize(options: ProResEncoderOptions): void;
+
+  /**
+   * Add a frame from RGBA data
+   * @param rgbaData - RGBA pixel data (width * height * 4 bytes)
+   */
+  addFrameRgba(rgbaData: Uint8Array | Uint8ClampedArray): void;
+
+  /**
+   * Add a frame from ImageData (e.g., from canvas.getImageData())
+   */
+  addFrameFromImageData(imageData: ImageData): void;
+
+  /**
+   * Add a frame directly from a canvas
+   */
+  addFrameFromCanvas(canvas: HTMLCanvasElement | OffscreenCanvas): void;
+
+  /**
+   * Finalize encoding and get the MOV file data
+   * @returns MOV file data
+   */
+  finalize(): Uint8Array;
+
+  /**
+   * Destroy the encoder and free resources
+   */
+  destroy(): void;
+}
+
+/**
+ * Create a new ProRes encoder
+ */
+export declare function createProResEncoder(): Promise<ProResEncoder>;
+
+/**
+ * Save MOV data as a downloadable file
+ */
+export declare function downloadMov(movData: Uint8Array, filename?: string): void;
+
+/**
+ * Convert MOV data to a Blob
+ */
+export declare function movToBlob(movData: Uint8Array): Blob;
+
+/**
+ * Convert MOV data to an Object URL
+ */
+export declare function movToObjectUrl(movData: Uint8Array): string;
+
+export default createProResEncoder;

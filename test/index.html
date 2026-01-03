@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ProRes WASM Encoder Demo</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #1a1a2e;
+      color: #eee;
+    }
+    h1 {
+      color: #00d4ff;
+      margin-bottom: 10px;
+    }
+    .subtitle {
+      color: #888;
+      margin-bottom: 30px;
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    .control-group {
+      background: #252542;
+      padding: 15px;
+      border-radius: 8px;
+    }
+    .control-group label {
+      display: block;
+      margin-bottom: 8px;
+      color: #aaa;
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+    .control-group select,
+    .control-group input {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #444;
+      border-radius: 4px;
+      background: #1a1a2e;
+      color: #fff;
+      font-size: 14px;
+    }
+    .canvas-container {
+      display: flex;
+      gap: 20px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+    .canvas-wrapper {
+      flex: 1;
+      min-width: 300px;
+    }
+    .canvas-wrapper h3 {
+      margin: 0 0 10px 0;
+      color: #888;
+      font-size: 14px;
+    }
+    canvas {
+      width: 100%;
+      background: #000;
+      border-radius: 8px;
+      border: 1px solid #333;
+    }
+    .buttons {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+    button {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-primary {
+      background: #00d4ff;
+      color: #000;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: #00b8e6;
+    }
+    .btn-secondary {
+      background: #444;
+      color: #fff;
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: #555;
+    }
+    .btn-success {
+      background: #00cc88;
+      color: #000;
+    }
+    .btn-success:hover:not(:disabled) {
+      background: #00b377;
+    }
+    .status {
+      background: #252542;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+    .status-label {
+      font-size: 12px;
+      color: #888;
+      text-transform: uppercase;
+      margin-bottom: 5px;
+    }
+    .status-value {
+      font-size: 18px;
+      font-weight: 600;
+    }
+    .status-value.encoding {
+      color: #ffaa00;
+    }
+    .status-value.ready {
+      color: #00cc88;
+    }
+    .status-value.idle {
+      color: #888;
+    }
+    .progress {
+      height: 4px;
+      background: #333;
+      border-radius: 2px;
+      margin-top: 10px;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #00d4ff, #00cc88);
+      width: 0%;
+      transition: width 0.1s;
+    }
+    .log {
+      background: #0d0d1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 15px;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 12px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .log-entry {
+      margin-bottom: 5px;
+      color: #888;
+    }
+    .log-entry.info {
+      color: #00d4ff;
+    }
+    .log-entry.success {
+      color: #00cc88;
+    }
+    .log-entry.error {
+      color: #ff4466;
+    }
+  </style>
+</head>
+<body>
+  <h1>ProRes WASM Encoder</h1>
+  <p class="subtitle">Encode canvas frames to ProRes MOV files directly in the browser</p>
+
+  <div class="controls">
+    <div class="control-group">
+      <label>Resolution</label>
+      <select id="resolution">
+        <option value="640x480">640 x 480 (SD)</option>
+        <option value="1280x720" selected>1280 x 720 (HD)</option>
+        <option value="1920x1080">1920 x 1080 (Full HD)</option>
+      </select>
+    </div>
+    <div class="control-group">
+      <label>Frame Rate</label>
+      <select id="framerate">
+        <option value="24000/1001">23.976 fps</option>
+        <option value="24/1">24 fps</option>
+        <option value="25/1">25 fps</option>
+        <option value="30000/1001">29.97 fps</option>
+        <option value="30/1" selected>30 fps</option>
+        <option value="60/1">60 fps</option>
+      </select>
+    </div>
+    <div class="control-group">
+      <label>ProRes Profile</label>
+      <select id="profile">
+        <option value="0">ProRes 422 Proxy</option>
+        <option value="1">ProRes 422 LT</option>
+        <option value="2">ProRes 422</option>
+        <option value="3" selected>ProRes 422 HQ</option>
+        <option value="4">ProRes 4444</option>
+        <option value="5">ProRes 4444 XQ</option>
+      </select>
+    </div>
+    <div class="control-group">
+      <label>Duration (frames)</label>
+      <input type="number" id="frames" value="90" min="1" max="1000">
+    </div>
+  </div>
+
+  <div class="canvas-container">
+    <div class="canvas-wrapper">
+      <h3>Preview</h3>
+      <canvas id="preview" width="640" height="360"></canvas>
+    </div>
+  </div>
+
+  <div class="buttons">
+    <button id="startBtn" class="btn-primary">Start Recording</button>
+    <button id="stopBtn" class="btn-secondary" disabled>Stop</button>
+    <button id="downloadBtn" class="btn-success" disabled>Download MOV</button>
+  </div>
+
+  <div class="status">
+    <div class="status-label">Status</div>
+    <div class="status-value idle" id="statusText">Ready</div>
+    <div class="progress">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+  </div>
+
+  <div class="log" id="log"></div>
+
+  <script type="module">
+    let createProResEncoder = null;
+    let moduleLoadError = null;
+
+    const log = (msg, type = '') => {
+      const logEl = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+    };
+
+    const setStatus = (text, className) => {
+      const statusEl = document.getElementById('statusText');
+      statusEl.textContent = text;
+      statusEl.className = `status-value ${className}`;
+    };
+
+    const setProgress = (percent) => {
+      document.getElementById('progressBar').style.width = `${percent}%`;
+    };
+
+    // Load encoder module relative to this file.
+    (async () => {
+      try {
+        const moduleUrl = new URL('../dist/prores-encoder.esm.js', import.meta.url);
+        const mod = await import(moduleUrl.href);
+        createProResEncoder = mod.default;
+        log('Encoder module loaded', 'info');
+      } catch (err) {
+        moduleLoadError = err;
+        log('Failed to load encoder module. Serve the repo root so ../dist is accessible.', 'error');
+      }
+    })();
+
+    // Animation function for demo content
+    function drawFrame(ctx, width, height, frame, totalFrames) {
+      const t = frame / totalFrames;
+
+      // Background gradient
+      const gradient = ctx.createLinearGradient(0, 0, width, height);
+      gradient.addColorStop(0, `hsl(${(t * 360) % 360}, 70%, 20%)`);
+      gradient.addColorStop(1, `hsl(${(t * 360 + 180) % 360}, 70%, 10%)`);
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, width, height);
+
+      // Animated circles
+      for (let i = 0; i < 5; i++) {
+        const angle = t * Math.PI * 2 + (i / 5) * Math.PI * 2;
+        const radius = Math.min(width, height) * 0.3;
+        const x = width / 2 + Math.cos(angle) * radius * 0.5;
+        const y = height / 2 + Math.sin(angle) * radius * 0.5;
+        const size = 30 + Math.sin(t * Math.PI * 4 + i) * 20;
+
+        ctx.beginPath();
+        ctx.arc(x, y, size, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${(t * 360 + i * 60) % 360}, 80%, 60%, 0.8)`;
+        ctx.fill();
+      }
+
+      // Central spinning shape
+      ctx.save();
+      ctx.translate(width / 2, height / 2);
+      ctx.rotate(t * Math.PI * 4);
+
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const angle = (i / 6) * Math.PI * 2;
+        const r = 60 + Math.sin(t * Math.PI * 6) * 20;
+        const px = Math.cos(angle) * r;
+        const py = Math.sin(angle) * r;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = `hsla(${t * 360}, 90%, 70%, 0.9)`;
+      ctx.fill();
+      ctx.restore();
+
+      // Frame counter
+      ctx.fillStyle = '#fff';
+      ctx.font = '16px monospace';
+      ctx.fillText(`Frame: ${frame + 1} / ${totalFrames}`, 20, 30);
+      ctx.fillText(`Time: ${(frame / 30).toFixed(2)}s`, 20, 50);
+    }
+
+    // Main app
+    let encoder = null;
+    let movData = null;
+    let isRecording = false;
+
+    const previewCanvas = document.getElementById('preview');
+    const previewCtx = previewCanvas.getContext('2d');
+
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+
+    // Update preview canvas size based on resolution
+    document.getElementById('resolution').addEventListener('change', (e) => {
+      const [w, h] = e.target.value.split('x').map(Number);
+      // Keep preview aspect ratio but scale down
+      const scale = Math.min(640 / w, 360 / h);
+      previewCanvas.width = w * scale;
+      previewCanvas.height = h * scale;
+    });
+
+    startBtn.addEventListener('click', async () => {
+      try {
+        if (!createProResEncoder) {
+          throw new Error(moduleLoadError ? moduleLoadError.message : 'Encoder module not loaded');
+        }
+        // Get settings
+        const [width, height] = document.getElementById('resolution').value.split('x').map(Number);
+        const [fpsNum, fpsDen] = document.getElementById('framerate').value.split('/').map(Number);
+        const profile = parseInt(document.getElementById('profile').value);
+        const totalFrames = parseInt(document.getElementById('frames').value);
+
+        log('Initializing encoder...', 'info');
+        setStatus('Initializing...', 'encoding');
+        log(`Resolution: ${width}x${height}`, 'info');
+        log(`Frame rate: ${fpsNum}/${fpsDen} fps`, 'info');
+        log(`Profile: ${document.getElementById('profile').selectedOptions[0].text}`, 'info');
+        log(`Frames: ${totalFrames}`, 'info');
+
+        isRecording = true;
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        downloadBtn.disabled = true;
+        movData = null;
+
+        // Create offscreen canvas for encoding
+        const encodeCanvas = document.createElement('canvas');
+        encodeCanvas.width = width;
+        encodeCanvas.height = height;
+        const encodeCtx = encodeCanvas.getContext('2d');
+
+        // Initialize encoder
+        encoder = await createProResEncoder();
+        encoder.initialize({
+          width,
+          height,
+          frameRateNum: fpsNum,
+          frameRateDen: fpsDen,
+          profile: profile,
+          quality: 85
+        });
+
+        // Encode frames
+        log('Encoding frames...', 'info');
+        setStatus('Encoding...', 'encoding');
+
+        for (let frame = 0; frame < totalFrames && isRecording; frame++) {
+          // Draw frame
+          drawFrame(encodeCtx, width, height, frame, totalFrames);
+
+          // Also draw to preview (scaled)
+          previewCtx.drawImage(encodeCanvas, 0, 0, previewCanvas.width, previewCanvas.height);
+
+          encoder.addFrameFromCanvas(encodeCanvas);
+
+          // Update progress
+          const progress = ((frame + 1) / totalFrames) * 100;
+          setProgress(progress);
+
+          // Yield to UI
+          if (frame % 5 === 0) {
+            await new Promise(r => setTimeout(r, 0));
+          }
+        }
+
+        if (!isRecording) {
+          log('Encoding cancelled', 'error');
+          setStatus('Cancelled', 'idle');
+          startBtn.disabled = false;
+          stopBtn.disabled = true;
+          if (encoder) {
+            encoder.destroy();
+            encoder = null;
+          }
+          return;
+        }
+
+        log('Finalizing MOV file...', 'info');
+        movData = encoder.finalize();
+        encoder.destroy();
+        encoder = null;
+
+        log(`Encoding complete! ${totalFrames} frames encoded`, 'success');
+
+        setStatus('Ready to download', 'ready');
+        setProgress(100);
+
+        isRecording = false;
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        downloadBtn.disabled = false;
+
+      } catch (err) {
+        const details = err && err.stack ? err.stack : (err && err.message ? err.message : String(err));
+        log(`Error: ${details}`, 'error');
+        setStatus('Error', 'idle');
+        isRecording = false;
+        if (encoder) {
+          encoder.destroy();
+          encoder = null;
+        }
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+      }
+    });
+
+    stopBtn.addEventListener('click', () => {
+      isRecording = false;
+      log('Stopping...', 'info');
+    });
+
+    downloadBtn.addEventListener('click', () => {
+      if (!movData) return;
+
+      const blob = new Blob([movData], { type: 'video/quicktime' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'output.mov';
+      a.click();
+      URL.revokeObjectURL(url);
+
+      log('Download started: output.mov', 'success');
+    });
+
+    // Initial log
+    log('ProRes WASM Encoder Demo loaded', 'info');
+    log('Select settings and click "Start Recording" to begin', 'info');
+  </script>
+</body>
+</html>

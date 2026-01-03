@@ -1,0 +1,38 @@
+{
+  "name": "prores-wasm",
+  "version": "0.1.0",
+  "description": "WebAssembly-based ProRes encoder for browser canvas encoding",
+  "main": "dist/prores-encoder.js",
+  "module": "dist/prores-encoder.esm.js",
+  "types": "dist/prores-encoder.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build:wasm": "./build/build.sh",
+    "build:js": "rollup -c",
+    "build": "npm run build:wasm && npm run build:js",
+    "test": "node test/test.js",
+    "demo": "npx serve test"
+  },
+  "keywords": [
+    "prores",
+    "webassembly",
+    "wasm",
+    "video",
+    "encoder",
+    "canvas",
+    "mov",
+    "quicktime"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "rollup": "^4.0.0",
+    "@rollup/plugin-node-resolve": "^15.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": ""
+  }
+}
