@@ -39,6 +39,8 @@ export interface ProResEncoderOptions {
   profile?: ProResProfileType;
   /** Quality 0-100 (default: 85) */
   quality?: number;
+  /** Color range (default: "limited") */
+  range?: 'full' | 'limited';
 }
 
 /**

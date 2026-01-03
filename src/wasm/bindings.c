@@ -16,6 +16,7 @@ typedef struct {
     int width;
     int height;
     int profile;
+    ProResColorRange range;
     uint16_t* yuv_buffer;
     size_t yuv_buffer_size;
 } ProResWasmContext;
@@ -29,13 +30,15 @@ typedef struct {
  * @param fps_den     Frame rate denominator
  * @param profile     Profile (0=proxy, 1=lt, 2=standard, 3=hq, 4=4444, 5=4444xq)
  * @param quality     Quality 0-100
+ * @param range       Color range (0=limited, 1=full)
  * @return            Context pointer or 0 on failure
  */
 EMSCRIPTEN_KEEPALIVE
 void* prores_wasm_create(
     int width, int height,
     int fps_num, int fps_den,
-    int profile, int quality)
+    int profile, int quality,
+    int range)
 {
     ProResWasmContext* ctx = (ProResWasmContext*)calloc(1, sizeof(ProResWasmContext));
     if (!ctx) return NULL;
@@ -43,6 +46,7 @@ void* prores_wasm_create(
     ctx->width = width;
     ctx->height = height;
     ctx->profile = profile;
+    ctx->range = (range != 0) ? PRORES_RANGE_FULL : PRORES_RANGE_LIMITED;
 
     /* Create encoder */
     ProResEncoderConfig enc_config = {
@@ -53,7 +57,8 @@ void* prores_wasm_create(
         .profile = (ProResProfile)profile,
         .colorspace = PRORES_CS_BT709,
         .frame_type = PRORES_FRAME_PROGRESSIVE,
-        .quality = quality
+        .quality = quality,
+        .range = ctx->range
     };
 
     ctx->encoder = prores_encoder_create(&enc_config);
@@ -63,19 +68,21 @@ void* prores_wasm_create(
     }
 
     /* Create muxer */
+    int mux_bit_depth = (profile >= 4) ? 12 : 10;
     MovMuxerConfig mux_config = {
         .width = width,
         .height = height,
         .fps_num = fps_num,
         .fps_den = fps_den,
         .fourcc = prores_encoder_get_fourcc(ctx->encoder),
-        .bit_depth = 10,
+        .bit_depth = mux_bit_depth,
         .has_alpha = (profile >= 4),
         .color = {
             .primaries = 1,  /* BT.709 */
             .transfer = 1,
             .matrix = 1
-        }
+        },
+        .full_range = (ctx->range == PRORES_RANGE_FULL)
     };
 
     ctx->muxer = mov_muxer_create(&mux_config);
@@ -123,16 +130,17 @@ int prores_wasm_add_frame_rgba(void* ctx_ptr, const uint8_t* rgba_ptr)
     if (!ctx || !rgba_ptr) return -1;
 
     /* Convert RGBA to YUV based on profile */
+    int bit_depth = (ctx->profile >= 4) ? 12 : 10;
     if (ctx->profile >= 4) {
         /* 4:4:4 profiles */
         if (ctx->profile == 4 || ctx->profile == 5) {
-            rgba_to_yuva444p10(rgba_ptr, ctx->yuv_buffer, ctx->width, ctx->height);
+            rgba_to_yuva444p10(rgba_ptr, ctx->yuv_buffer, ctx->width, ctx->height, bit_depth, ctx->range);
         } else {
-            rgba_to_yuv444p10(rgba_ptr, ctx->yuv_buffer, ctx->width, ctx->height);
+            rgba_to_yuv444p10(rgba_ptr, ctx->yuv_buffer, ctx->width, ctx->height, bit_depth, ctx->range);
         }
     } else {
         /* 4:2:2 profiles */
-        rgba_to_yuv422p10(rgba_ptr, ctx->yuv_buffer, ctx->width, ctx->height);
+        rgba_to_yuv422p10(rgba_ptr, ctx->yuv_buffer, ctx->width, ctx->height, bit_depth, ctx->range);
     }
 
     /* Encode frame */

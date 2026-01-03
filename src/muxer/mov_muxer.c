@@ -56,6 +56,7 @@
 #define MOV_COLR  FOURCC('c','o','l','r')
 #define MOV_VIDE  FOURCC('v','i','d','e')
 #define MOV_NCLC  FOURCC('n','c','l','c')
+#define MOV_NCLX  FOURCC('n','c','l','x')
 
 /* Sample entry */
 typedef struct {
@@ -480,9 +481,16 @@ static uint8_t* write_stsd(uint8_t* p, MovMuxerContext* ctx)
     WRITE_BE16(p, 1); p += 2;
 
     /* Compressor name (32 bytes, Pascal string) */
+    const char* compressor = "Apple ProRes 422";
+    uint8_t compressor_len = 17;
+    if (ctx->config.fourcc == FOURCC('a','p','4','h') ||
+        ctx->config.fourcc == FOURCC('a','p','4','x')) {
+        compressor = "Apple ProRes 4444";
+        compressor_len = 17;
+    }
     memset(p, 0, 32);
-    p[0] = 17;  /* Length */
-    memcpy(p + 1, "Apple ProRes 422", 16);
+    p[0] = compressor_len;
+    memcpy(p + 1, compressor, compressor_len);
     p += 32;
 
     /* Depth */
@@ -501,10 +509,13 @@ static uint8_t* write_stsd(uint8_t* p, MovMuxerContext* ctx)
     /* colr atom */
     uint8_t* colr_start = p;
     p += 8;
-    WRITE_BE32(p, MOV_NCLC); p += 4;  /* Color parameter type */
+    WRITE_BE32(p, ctx->config.full_range ? MOV_NCLX : MOV_NCLC); p += 4;  /* Color parameter type */
     WRITE_BE16(p, ctx->config.color.primaries); p += 2;
     WRITE_BE16(p, ctx->config.color.transfer); p += 2;
     WRITE_BE16(p, ctx->config.color.matrix); p += 2;
+    if (ctx->config.full_range) {
+        *p++ = 0x80;  /* Full range flag */
+    }
     write_box_header(colr_start, MOV_COLR, p - colr_start);
 
     /* Write entry header with ProRes FourCC */

@@ -29,6 +29,12 @@ typedef enum {
     PRORES_CS_BT2020 = 1,
 } ProResColorSpace;
 
+/* Color Range */
+typedef enum {
+    PRORES_RANGE_LIMITED = 0,
+    PRORES_RANGE_FULL = 1,
+} ProResColorRange;
+
 /* Pixel Format */
 typedef enum {
     PRORES_PIX_FMT_YUV422P10 = 0,  /* 4:2:2 10-bit planar */
@@ -53,6 +59,7 @@ typedef struct {
     ProResColorSpace colorspace;
     ProResFrameType frame_type;
     int quality;           /* 0-100, higher is better */
+    ProResColorRange range;
 } ProResEncoderConfig;
 
 /* Opaque encoder context */
@@ -120,7 +127,9 @@ void rgba_to_yuv422p10(
     const uint8_t* rgba,
     uint16_t* yuv,
     int width,
-    int height
+    int height,
+    int bit_depth,
+    ProResColorRange range
 );
 
 /*
@@ -135,7 +144,9 @@ void rgba_to_yuv444p10(
     const uint8_t* rgba,
     uint16_t* yuv,
     int width,
-    int height
+    int height,
+    int bit_depth,
+    ProResColorRange range
 );
 
 /*
@@ -150,7 +161,9 @@ void rgba_to_yuva444p10(
     const uint8_t* rgba,
     uint16_t* yuva,
     int width,
-    int height
+    int height,
+    int bit_depth,
+    ProResColorRange range
 );
 
 #ifdef __cplusplus

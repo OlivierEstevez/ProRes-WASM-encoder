@@ -35,6 +35,7 @@ typedef struct {
     uint32_t fourcc;        /* ProRes FourCC (e.g., 'apch') */
     int bit_depth;          /* 10 or 12 */
     int has_alpha;          /* 1 if alpha channel present */
+    int full_range;         /* 1 if full range, 0 if limited */
     MovColorInfo color;     /* Color metadata */
 } MovMuxerConfig;
 

@@ -118,6 +118,8 @@ struct ProResEncoderContext {
     /* Quantization */
     uint8_t quant_matrix[64];
     int q_scale;             /* Quantization scale factor */
+    int bit_depth;
+    int sample_center;
 
     /* Working buffers */
     int16_t* y_plane;        /* Luma buffer */
@@ -194,10 +196,13 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
     ctx->num_slices = ctx->slices_per_row * ctx->mb_height;
     ctx->slice_mb_count = ctx->slice_mb_width;  /* MBs per slice (may be less for last slice in row) */
 
-    /* Quality affects quantization scale */
-    ctx->q_scale = 128 - (config->quality * 127 / 100);
+    /* Quality affects quantization scale (1..16, lower is higher quality) */
+    ctx->q_scale = 1 + (100 - config->quality) * 15 / 100;
     if (ctx->q_scale < 1) ctx->q_scale = 1;
-    if (ctx->q_scale > 128) ctx->q_scale = 128;
+    if (ctx->q_scale > 16) ctx->q_scale = 16;
+
+    ctx->bit_depth = is_444_profile(config->profile) ? 12 : 10;
+    ctx->sample_center = 1 << (ctx->bit_depth - 1);
 
     /* Copy quantization matrix */
     memcpy(ctx->quant_matrix, get_quant_matrix(config->profile), 64);
@@ -340,7 +345,7 @@ static int write_frame_header(ProResEncoderContext* ctx, uint8_t* buf)
 }
 
 /* DCT into raster order (ProRes quantization happens during VLC) */
-static void dct_block(const int16_t* src, int stride, int16_t* dst)
+static void dct_block(const int16_t* src, int stride, int16_t* dst, int sample_center)
 {
     int16_t block[64];
     int i, j;
@@ -348,7 +353,7 @@ static void dct_block(const int16_t* src, int stride, int16_t* dst)
     /* Copy to contiguous block and center to signed range */
     for (i = 0; i < 8; i++) {
         for (j = 0; j < 8; j++) {
-            block[i * 8 + j] = src[i * stride + j] - 512;
+            block[i * 8 + j] = src[i * stride + j] - sample_center;
         }
     }
 
@@ -475,7 +480,8 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
 
                 dct_block(ctx->y_plane + by * ctx->padded_width + bx,
                           ctx->padded_width,
-                          luma_blocks[luma_block_count]);
+                          luma_blocks[luma_block_count],
+                          ctx->sample_center);
                 luma_block_count++;
             }
         }
@@ -508,7 +514,8 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
 
                     dct_block(ctx->u_plane + by * ctx->padded_width + bx,
                               ctx->padded_width,
-                              u_blocks[chroma_block_count]);
+                              u_blocks[chroma_block_count],
+                              ctx->sample_center);
                     chroma_block_count++;
                 }
             }
@@ -520,7 +527,8 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
 
                 dct_block(ctx->u_plane + by * chroma_width + bx,
                           chroma_width,
-                          u_blocks[chroma_block_count]);
+                          u_blocks[chroma_block_count],
+                          ctx->sample_center);
                 chroma_block_count++;
             }
         }
@@ -554,7 +562,8 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
 
                     dct_block(ctx->v_plane + by * ctx->padded_width + bx,
                               ctx->padded_width,
-                              v_blocks[v_block_count]);
+                              v_blocks[v_block_count],
+                              ctx->sample_center);
                     v_block_count++;
                 }
             }
@@ -566,7 +575,8 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
 
                 dct_block(ctx->v_plane + by * chroma_width + bx,
                           chroma_width,
-                          v_blocks[v_block_count]);
+                          v_blocks[v_block_count],
+                          ctx->sample_center);
                 v_block_count++;
             }
         }
@@ -825,11 +835,17 @@ void prores_encoder_destroy(ProResEncoderContext* ctx)
 
 /* Color conversion functions */
 
-void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height)
+void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height, int bit_depth, ProResColorRange range)
 {
     int x, y;
     int plane_size = width * height;
     int chroma_width = (width + 1) / 2;
+    int scale = 1 << (bit_depth - 8);
+    int max_val = (1 << bit_depth) - 1;
+    int y_min = 16 * scale;
+    int y_max = 235 * scale;
+    int c_min = 16 * scale;
+    int c_max = 240 * scale;
 
     uint16_t* y_plane = yuv;
     uint16_t* u_plane = yuv + plane_size;
@@ -842,11 +858,20 @@ void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
             int g = rgba[idx + 1];
             int b = rgba[idx + 2];
 
-            /* BT.709 RGB to YCbCr, scaled to 10-bit (64-940 for Y, 64-960 for C) */
-            int y_val = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
-            y_val = (y_val * 4);  /* Scale 8-bit to 10-bit */
-            if (y_val < 64) y_val = 64;
-            if (y_val > 940) y_val = 940;
+            int y_val;
+            if (range == PRORES_RANGE_FULL) {
+                /* BT.709 full-range RGB to YCbCr */
+                y_val = ((54 * r + 183 * g + 19 * b + 128) >> 8);
+                y_val = y_val * scale;
+                if (y_val < 0) y_val = 0;
+                if (y_val > max_val) y_val = max_val;
+            } else {
+                /* BT.709 video-range RGB to YCbCr */
+                y_val = ((46 * r + 157 * g + 16 * b + 128) >> 8) + 16;
+                y_val = y_val * scale;
+                if (y_val < y_min) y_val = y_min;
+                if (y_val > y_max) y_val = y_max;
+            }
             y_plane[y * width + x] = y_val;
 
             /* Subsample chroma (average of 2 horizontal pixels) */
@@ -860,16 +885,27 @@ void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
                 int gavg = (g + g2) / 2;
                 int bavg = (b + b2) / 2;
 
-                int cb = ((-38 * ravg - 74 * gavg + 112 * bavg + 128) >> 8) + 128;
-                int cr = ((112 * ravg - 94 * gavg - 18 * bavg + 128) >> 8) + 128;
-
-                cb = cb * 4;  /* Scale to 10-bit */
-                cr = cr * 4;
-
-                if (cb < 64) cb = 64;
-                if (cb > 960) cb = 960;
-                if (cr < 64) cr = 64;
-                if (cr > 960) cr = 960;
+                int cb;
+                int cr;
+                if (range == PRORES_RANGE_FULL) {
+                    cb = ((-29 * ravg - 99 * gavg + 128 * bavg + 128) >> 8) + 128;
+                    cr = ((128 * ravg - 116 * gavg - 12 * bavg + 128) >> 8) + 128;
+                    cb = cb * scale;
+                    cr = cr * scale;
+                    if (cb < 0) cb = 0;
+                    if (cb > max_val) cb = max_val;
+                    if (cr < 0) cr = 0;
+                    if (cr > max_val) cr = max_val;
+                } else {
+                    cb = ((-26 * ravg - 87 * gavg + 112 * bavg + 128) >> 8) + 128;
+                    cr = ((112 * ravg - 102 * gavg - 10 * bavg + 128) >> 8) + 128;
+                    cb = cb * scale;
+                    cr = cr * scale;
+                    if (cb < c_min) cb = c_min;
+                    if (cb > c_max) cb = c_max;
+                    if (cr < c_min) cr = c_min;
+                    if (cr > c_max) cr = c_max;
+                }
 
                 u_plane[y * chroma_width + x / 2] = cb;
                 v_plane[y * chroma_width + x / 2] = cr;
@@ -878,10 +914,16 @@ void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
     }
 }
 
-void rgba_to_yuv444p10(const uint8_t* rgba, uint16_t* yuv, int width, int height)
+void rgba_to_yuv444p10(const uint8_t* rgba, uint16_t* yuv, int width, int height, int bit_depth, ProResColorRange range)
 {
     int x, y;
     int plane_size = width * height;
+    int scale = 1 << (bit_depth - 8);
+    int max_val = (1 << bit_depth) - 1;
+    int y_min = 16 * scale;
+    int y_max = 235 * scale;
+    int c_min = 16 * scale;
+    int c_max = 240 * scale;
 
     uint16_t* y_plane = yuv;
     uint16_t* u_plane = yuv + plane_size;
@@ -894,23 +936,38 @@ void rgba_to_yuv444p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
             int g = rgba[idx + 1];
             int b = rgba[idx + 2];
 
-            /* BT.709 RGB to YCbCr */
-            int y_val = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
-            int cb = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
-            int cr = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+            int y_val;
+            int cb;
+            int cr;
+            if (range == PRORES_RANGE_FULL) {
+                y_val = ((54 * r + 183 * g + 19 * b + 128) >> 8);
+                cb = ((-29 * r - 99 * g + 128 * b + 128) >> 8) + 128;
+                cr = ((128 * r - 116 * g - 12 * b + 128) >> 8) + 128;
+            } else {
+                y_val = ((46 * r + 157 * g + 16 * b + 128) >> 8) + 16;
+                cb = ((-26 * r - 87 * g + 112 * b + 128) >> 8) + 128;
+                cr = ((112 * r - 102 * g - 10 * b + 128) >> 8) + 128;
+            }
 
-            /* Scale to 10-bit */
-            y_val = y_val * 4;
-            cb = cb * 4;
-            cr = cr * 4;
+            y_val = y_val * scale;
+            cb = cb * scale;
+            cr = cr * scale;
 
-            /* Clamp */
-            if (y_val < 64) y_val = 64;
-            if (y_val > 940) y_val = 940;
-            if (cb < 64) cb = 64;
-            if (cb > 960) cb = 960;
-            if (cr < 64) cr = 64;
-            if (cr > 960) cr = 960;
+            if (range == PRORES_RANGE_FULL) {
+                if (y_val < 0) y_val = 0;
+                if (y_val > max_val) y_val = max_val;
+                if (cb < 0) cb = 0;
+                if (cb > max_val) cb = max_val;
+                if (cr < 0) cr = 0;
+                if (cr > max_val) cr = max_val;
+            } else {
+                if (y_val < y_min) y_val = y_min;
+                if (y_val > y_max) y_val = y_max;
+                if (cb < c_min) cb = c_min;
+                if (cb > c_max) cb = c_max;
+                if (cr < c_min) cr = c_min;
+                if (cr > c_max) cr = c_max;
+            }
 
             y_plane[y * width + x] = y_val;
             u_plane[y * width + x] = cb;
@@ -919,10 +976,16 @@ void rgba_to_yuv444p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
     }
 }
 
-void rgba_to_yuva444p10(const uint8_t* rgba, uint16_t* yuva, int width, int height)
+void rgba_to_yuva444p10(const uint8_t* rgba, uint16_t* yuva, int width, int height, int bit_depth, ProResColorRange range)
 {
     int x, y;
     int plane_size = width * height;
+    int scale = 1 << (bit_depth - 8);
+    int max_val = (1 << bit_depth) - 1;
+    int y_min = 16 * scale;
+    int y_max = 235 * scale;
+    int c_min = 16 * scale;
+    int c_max = 240 * scale;
 
     uint16_t* y_plane = yuva;
     uint16_t* u_plane = yuva + plane_size;
@@ -937,25 +1000,40 @@ void rgba_to_yuva444p10(const uint8_t* rgba, uint16_t* yuva, int width, int heig
             int b = rgba[idx + 2];
             int a = rgba[idx + 3];
 
-            /* BT.709 RGB to YCbCr */
-            int y_val = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
-            int cb = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
-            int cr = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+            int y_val;
+            int cb;
+            int cr;
+            if (range == PRORES_RANGE_FULL) {
+                y_val = ((54 * r + 183 * g + 19 * b + 128) >> 8);
+                cb = ((-29 * r - 99 * g + 128 * b + 128) >> 8) + 128;
+                cr = ((128 * r - 116 * g - 12 * b + 128) >> 8) + 128;
+            } else {
+                y_val = ((46 * r + 157 * g + 16 * b + 128) >> 8) + 16;
+                cb = ((-26 * r - 87 * g + 112 * b + 128) >> 8) + 128;
+                cr = ((112 * r - 102 * g - 10 * b + 128) >> 8) + 128;
+            }
 
-            /* Scale to 10-bit */
-            y_val = y_val * 4;
-            cb = cb * 4;
-            cr = cr * 4;
-            int a_val = a * 4;  /* Alpha is full range */
+            y_val = y_val * scale;
+            cb = cb * scale;
+            cr = cr * scale;
+            int a_val = a * scale;
 
-            /* Clamp */
-            if (y_val < 64) y_val = 64;
-            if (y_val > 940) y_val = 940;
-            if (cb < 64) cb = 64;
-            if (cb > 960) cb = 960;
-            if (cr < 64) cr = 64;
-            if (cr > 960) cr = 960;
-            if (a_val > 1023) a_val = 1023;
+            if (range == PRORES_RANGE_FULL) {
+                if (y_val < 0) y_val = 0;
+                if (y_val > max_val) y_val = max_val;
+                if (cb < 0) cb = 0;
+                if (cb > max_val) cb = max_val;
+                if (cr < 0) cr = 0;
+                if (cr > max_val) cr = max_val;
+            } else {
+                if (y_val < y_min) y_val = y_min;
+                if (y_val > y_max) y_val = y_max;
+                if (cb < c_min) cb = c_min;
+                if (cb > c_max) cb = c_max;
+                if (cr < c_min) cr = c_min;
+                if (cr > c_max) cr = c_max;
+            }
+            if (a_val > max_val) a_val = max_val;
 
             y_plane[y * width + x] = y_val;
             u_plane[y * width + x] = cb;

@@ -293,12 +293,24 @@
           <label>Duration (frames)</label>
           <input type="number" id="frames" value="90" min="1" max="1000">
         </div>
+        <div class="control-group">
+          <label>Color Range</label>
+          <select id="range">
+            <option value="full">Full</option>
+            <option value="limited" selected>Video (Limited)</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label>PNG Sequence</label>
+          <input type="checkbox" id="pngSequence">
+        </div>
       </div>
       <div class="actions">
         <div class="buttons">
           <button id="startBtn" class="btn-primary">Record</button>
           <button id="stopBtn" class="btn-secondary" disabled>Stop</button>
           <button id="downloadBtn" class="btn-success" disabled>Download</button>
+          <button id="downloadPngBtn" class="btn-secondary" disabled>Download PNG Zip</button>
         </div>
         <div class="status">
           <div class="status-label">Status</div>
@@ -348,6 +360,122 @@
       }
     })();
 
+    const textEncoder = new TextEncoder();
+    const crcTable = (() => {
+      const table = new Uint32Array(256);
+      for (let i = 0; i < 256; i++) {
+        let c = i;
+        for (let k = 0; k < 8; k++) {
+          c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        }
+        table[i] = c >>> 0;
+      }
+      return table;
+    })();
+
+    const crc32 = (data) => {
+      let crc = 0xFFFFFFFF;
+      for (let i = 0; i < data.length; i++) {
+        crc = crcTable[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8);
+      }
+      return (crc ^ 0xFFFFFFFF) >>> 0;
+    };
+
+    const buildZip = (files) => {
+      const parts = [];
+      const centralParts = [];
+      let offset = 0;
+
+      for (const file of files) {
+        const nameBytes = textEncoder.encode(file.name);
+        const data = file.data;
+        const crc = crc32(data);
+
+        const localHeader = new Uint8Array(30 + nameBytes.length);
+        const view = new DataView(localHeader.buffer);
+        view.setUint32(0, 0x04034b50, true);
+        view.setUint16(4, 20, true);
+        view.setUint16(6, 0, true);
+        view.setUint16(8, 0, true);
+        view.setUint16(10, 0, true);
+        view.setUint16(12, 0, true);
+        view.setUint32(14, crc, true);
+        view.setUint32(18, data.length, true);
+        view.setUint32(22, data.length, true);
+        view.setUint16(26, nameBytes.length, true);
+        view.setUint16(28, 0, true);
+        localHeader.set(nameBytes, 30);
+
+        parts.push(localHeader, data);
+
+        const centralHeader = new Uint8Array(46 + nameBytes.length);
+        const cview = new DataView(centralHeader.buffer);
+        cview.setUint32(0, 0x02014b50, true);
+        cview.setUint16(4, 20, true);
+        cview.setUint16(6, 20, true);
+        cview.setUint16(8, 0, true);
+        cview.setUint16(10, 0, true);
+        cview.setUint16(12, 0, true);
+        cview.setUint16(14, 0, true);
+        cview.setUint32(16, crc, true);
+        cview.setUint32(20, data.length, true);
+        cview.setUint32(24, data.length, true);
+        cview.setUint16(28, nameBytes.length, true);
+        cview.setUint16(30, 0, true);
+        cview.setUint16(32, 0, true);
+        cview.setUint16(34, 0, true);
+        cview.setUint16(36, 0, true);
+        cview.setUint32(38, 0, true);
+        cview.setUint32(42, offset, true);
+        centralHeader.set(nameBytes, 46);
+
+        centralParts.push(centralHeader);
+        offset += localHeader.length + data.length;
+      }
+
+      const centralOffset = offset;
+      let centralSize = 0;
+      for (const part of centralParts) {
+        centralSize += part.length;
+      }
+
+      parts.push(...centralParts);
+
+      const endRecord = new Uint8Array(22);
+      const endView = new DataView(endRecord.buffer);
+      endView.setUint32(0, 0x06054b50, true);
+      endView.setUint16(4, 0, true);
+      endView.setUint16(6, 0, true);
+      endView.setUint16(8, files.length, true);
+      endView.setUint16(10, files.length, true);
+      endView.setUint32(12, centralSize, true);
+      endView.setUint32(16, centralOffset, true);
+      endView.setUint16(20, 0, true);
+      parts.push(endRecord);
+
+      let totalSize = 0;
+      for (const part of parts) {
+        totalSize += part.length;
+      }
+      const out = new Uint8Array(totalSize);
+      let cursor = 0;
+      for (const part of parts) {
+        out.set(part, cursor);
+        cursor += part.length;
+      }
+      return out;
+    };
+
+    const canvasToPngBlob = (canvas) => new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error('Failed to capture PNG'));
+          return;
+        }
+        resolve(blob);
+      }, 'image/png');
+    });
+
     // p5.js sketch for demo content
     let p5Instance = null;
     let currentFrame = 0;
@@ -381,7 +509,7 @@
             const y = p.height / 2 + Math.sin(angle) * radius * 0.6;
             const size = 24 + Math.sin(t * Math.PI * 4 + i) * 18;
             p.noStroke();
-            p.fill((t * 360 + i * 36) % 360, 80, 60, 0.85);
+            p.fill((t * 360 + i * 36) % 360, 80, 60);
             p.circle(x, y, size);
           }
 
@@ -389,7 +517,7 @@
           p.translate(p.width / 2, p.height / 2);
           p.rotate(t * Math.PI * 2.5);
           p.noStroke();
-          p.fill(0, 0, 100, 0.7);
+          p.fill(0, 0, 100);
           p.beginShape();
           for (let i = 0; i < 6; i++) {
             const angle = (i / 6) * Math.PI * 2;
@@ -426,11 +554,14 @@
     // Main app
     let encoder = null;
     let movData = null;
+    let pngZipData = null;
+    let pngFrames = [];
     let isRecording = false;
 
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
     const downloadBtn = document.getElementById('downloadBtn');
+    const downloadPngBtn = document.getElementById('downloadPngBtn');
 
     // Update preview canvas size based on resolution
     document.getElementById('resolution').addEventListener('change', (e) => {
@@ -442,6 +573,7 @@
       p5Instance.redraw();
     });
 
+
     startBtn.addEventListener('click', async () => {
       try {
         if (!createProResEncoder) {
@@ -452,6 +584,8 @@
         const [fpsNum, fpsDen] = document.getElementById('framerate').value.split('/').map(Number);
         const profile = parseInt(document.getElementById('profile').value);
         const totalFrames = parseInt(document.getElementById('frames').value);
+        const range = document.getElementById('range').value;
+        const capturePng = document.getElementById('pngSequence').checked;
         document.documentElement.style.setProperty('--preview-aspect', `${width} / ${height}`);
 
         log('Initializing encoder...', 'info');
@@ -465,7 +599,10 @@
         startBtn.disabled = true;
         stopBtn.disabled = false;
         downloadBtn.disabled = true;
+        downloadPngBtn.disabled = true;
         movData = null;
+        pngZipData = null;
+        pngFrames = [];
 
         ensureP5(width, height);
         currentTotalFrames = totalFrames;
@@ -478,7 +615,8 @@
           frameRateNum: fpsNum,
           frameRateDen: fpsDen,
           profile: profile,
-          quality: 85
+          quality: 85,
+          range
         });
 
         // Encode frames
@@ -489,6 +627,12 @@
           currentFrame = frame;
           p5Instance.redraw();
           encoder.addFrameFromCanvas(p5Instance.canvas);
+
+          if (capturePng) {
+            const blob = await canvasToPngBlob(p5Instance.canvas);
+            const name = `frame_${String(frame + 1).padStart(4, '0')}.png`;
+            pngFrames.push({ name, blob });
+          }
 
           // Update progress
           const progress = ((frame + 1) / totalFrames) * 100;
@@ -516,6 +660,18 @@
         movData = encoder.finalize();
         encoder.destroy();
         encoder = null;
+
+        if (capturePng && pngFrames.length) {
+          log(`Building PNG zip (${pngFrames.length} frames)...`, 'info');
+          const files = [];
+          for (const frame of pngFrames) {
+            const buffer = await frame.blob.arrayBuffer();
+            files.push({ name: frame.name, data: new Uint8Array(buffer) });
+          }
+          pngZipData = buildZip(files);
+          downloadPngBtn.disabled = false;
+          log('PNG zip ready', 'success');
+        }
 
         log(`Encoding complete! ${totalFrames} frames encoded`, 'success');
 
@@ -558,6 +714,20 @@
       URL.revokeObjectURL(url);
 
       log('Download started: output.mov', 'success');
+    });
+
+    downloadPngBtn.addEventListener('click', () => {
+      if (!pngZipData) return;
+
+      const blob = new Blob([pngZipData], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'frames.zip';
+      a.click();
+      URL.revokeObjectURL(url);
+
+      log('Download started: frames.zip', 'success');
     });
 
     // Initial log
