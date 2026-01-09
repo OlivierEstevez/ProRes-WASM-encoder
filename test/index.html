@@ -307,6 +307,8 @@
       </div>
       <div class="actions">
         <div class="buttons">
+          <input type="file" id="pngFolderInput" webkitdirectory multiple accept="image/png" style="display: none;">
+          <button id="uploadPngBtn" class="btn-secondary">Upload PNG Folder</button>
           <button id="startBtn" class="btn-primary">Record</button>
           <button id="stopBtn" class="btn-secondary" disabled>Stop</button>
           <button id="downloadBtn" class="btn-success" disabled>Download</button>
@@ -562,6 +564,8 @@
     const stopBtn = document.getElementById('stopBtn');
     const downloadBtn = document.getElementById('downloadBtn');
     const downloadPngBtn = document.getElementById('downloadPngBtn');
+    const uploadPngBtn = document.getElementById('uploadPngBtn');
+    const pngFolderInput = document.getElementById('pngFolderInput');
 
     // Update preview canvas size based on resolution
     document.getElementById('resolution').addEventListener('change', (e) => {
@@ -730,9 +734,173 @@
       log('Download started: frames.zip', 'success');
     });
 
+    // PNG folder upload handlers
+    uploadPngBtn.addEventListener('click', () => {
+      pngFolderInput.click();
+    });
+
+    pngFolderInput.addEventListener('change', async (e) => {
+      const files = Array.from(e.target.files);
+      if (!files.length) return;
+
+      // Filter for PNG files only and sort by name
+      const pngFiles = files
+        .filter(f => f.name.toLowerCase().endsWith('.png'))
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+      if (!pngFiles.length) {
+        log('No PNG files found in folder', 'error');
+        return;
+      }
+
+      log(`Found ${pngFiles.length} PNG files`, 'info');
+
+      try {
+        if (!createProResEncoder) {
+          throw new Error(moduleLoadError ? moduleLoadError.message : 'Encoder module not loaded');
+        }
+
+        // Load first image to get dimensions
+        const firstImg = await loadImageFromFile(pngFiles[0]);
+        const width = firstImg.width;
+        const height = firstImg.height;
+
+        log(`Detected resolution: ${width}x${height}`, 'info');
+
+        // Get settings
+        const [fpsNum, fpsDen] = document.getElementById('framerate').value.split('/').map(Number);
+        const profile = parseInt(document.getElementById('profile').value);
+        const range = document.getElementById('range').value;
+
+        log('Initializing encoder for PNG sequence...', 'info');
+        setStatus('Initializing...', 'encoding');
+        log(`Frame rate: ${fpsNum}/${fpsDen} fps`, 'info');
+        log(`Profile: ${document.getElementById('profile').selectedOptions[0].text}`, 'info');
+        log(`Range: ${range}`, 'info');
+
+        isRecording = true;
+        startBtn.disabled = true;
+        uploadPngBtn.disabled = true;
+        stopBtn.disabled = false;
+        downloadBtn.disabled = true;
+        downloadPngBtn.disabled = true;
+        movData = null;
+
+        // Create offscreen canvas for loading images
+        const offscreenCanvas = document.createElement('canvas');
+        offscreenCanvas.width = width;
+        offscreenCanvas.height = height;
+        const offscreenCtx = offscreenCanvas.getContext('2d');
+
+        // Initialize encoder
+        encoder = await createProResEncoder();
+        encoder.initialize({
+          width,
+          height,
+          frameRateNum: fpsNum,
+          frameRateDen: fpsDen,
+          profile: profile,
+          quality: 85,
+          range
+        });
+
+        log('Encoding PNG frames...', 'info');
+        setStatus('Encoding...', 'encoding');
+
+        for (let i = 0; i < pngFiles.length && isRecording; i++) {
+          const file = pngFiles[i];
+          const img = await loadImageFromFile(file);
+
+          // Draw to canvas
+          offscreenCtx.drawImage(img, 0, 0);
+          const imageData = offscreenCtx.getImageData(0, 0, width, height);
+
+          // Encode frame
+          encoder.addFrameRgba(imageData.data);
+
+          // Update progress
+          const progress = ((i + 1) / pngFiles.length) * 100;
+          setProgress(progress);
+
+          // Update preview (show current frame)
+          ensureP5(width, height);
+          const previewCtx = p5Instance.drawingContext;
+          previewCtx.drawImage(img, 0, 0);
+
+          if (i % 5 === 0) {
+            log(`Encoded frame ${i + 1}/${pngFiles.length}: ${file.name}`, 'info');
+            await new Promise(r => setTimeout(r, 0));
+          }
+        }
+
+        if (!isRecording) {
+          log('Encoding cancelled', 'error');
+          setStatus('Cancelled', 'idle');
+          startBtn.disabled = false;
+          uploadPngBtn.disabled = false;
+          stopBtn.disabled = true;
+          if (encoder) {
+            encoder.destroy();
+            encoder = null;
+          }
+          return;
+        }
+
+        log('Finalizing MOV file...', 'info');
+        movData = encoder.finalize();
+        encoder.destroy();
+        encoder = null;
+
+        log(`Encoding complete! ${pngFiles.length} frames encoded from PNG sequence`, 'success');
+        log(`Output size: ${(movData.length / 1024 / 1024).toFixed(2)} MB`, 'info');
+
+        setStatus('Ready to download', 'ready');
+        setProgress(100);
+
+        isRecording = false;
+        startBtn.disabled = false;
+        uploadPngBtn.disabled = false;
+        stopBtn.disabled = true;
+        downloadBtn.disabled = false;
+
+      } catch (err) {
+        const details = err && err.stack ? err.stack : (err && err.message ? err.message : String(err));
+        log(`Error: ${details}`, 'error');
+        setStatus('Error', 'idle');
+        isRecording = false;
+        if (encoder) {
+          encoder.destroy();
+          encoder = null;
+        }
+        startBtn.disabled = false;
+        uploadPngBtn.disabled = false;
+        stopBtn.disabled = true;
+      }
+
+      // Reset file input so the same folder can be selected again
+      pngFolderInput.value = '';
+    });
+
+    // Helper function to load image from file
+    const loadImageFromFile = (file) => {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+          URL.revokeObjectURL(url);
+          resolve(img);
+        };
+        img.onerror = (err) => {
+          URL.revokeObjectURL(url);
+          reject(err);
+        };
+        img.src = url;
+      });
+    };
+
     // Initial log
     log('ProRes WASM Encoder Demo loaded', 'info');
-    log('Select settings and click "Start Recording" to begin', 'info');
+    log('Click "Record" to capture canvas, or "Upload PNG Folder" to encode a PNG sequence', 'info');
   </script>
 </body>
 </html>
