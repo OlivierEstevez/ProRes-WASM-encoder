@@ -1,135 +1,154 @@
 /*
  * ProRes DCT Implementation
- * Based on AAN (Arai-Agui-Nakajima) fast DCT algorithm
+ * Based on Loeffler algorithm from libjpeg (jfdctint.c)
  * Integer-only implementation for WebAssembly compatibility
+ *
+ * This is a slow-but-accurate integer DCT. For better accuracy at edges,
+ * we use the proven libjpeg algorithm rather than faster approximations.
  */
 
 #include "prores_dct.h"
 
-/* DCT constants scaled by 2^14 */
-#define FIX_0_382683433  6270   /* cos(3*pi/8) * 2^14 */
-#define FIX_0_541196100  8867   /* cos(3*pi/8) + cos(pi/8) / 2 */
-#define FIX_0_707106781  11585  /* 1/sqrt(2) * 2^14 */
-#define FIX_1_306562965  21407  /* cos(pi/8) * 2^14 */
+/* DCT constants scaled by 2^13 (from libjpeg jfdctint.c) */
+#define FIX_0_298631336  2446
+#define FIX_0_390180644  3196
+#define FIX_0_541196100  4433
+#define FIX_0_765366865  6270
+#define FIX_0_899976223  7373
+#define FIX_1_175875602  9633
+#define FIX_1_501321110  12299
+#define FIX_1_847759065  15137
+#define FIX_1_961570560  16069
+#define FIX_2_053119869  16819
+#define FIX_2_562915447  20995
+#define FIX_3_072711026  25172
 
-#define CONST_BITS  14
+#define CONST_BITS  13
 #define PASS1_BITS  2
 
+#define MULTIPLY(a, b)  ((int32_t)(a) * (int32_t)(b))
 #define DESCALE(x, n)  (((x) + (1 << ((n) - 1))) >> (n))
 
 /*
- * 1D DCT on 8 elements (row or column)
+ * Perform the forward DCT on one 8x8 block of samples.
+ * Based on libjpeg's jpeg_fdct_islow (jfdctint.c)
  */
-static void fdct_1d(int32_t* data)
+void prores_fdct_8x8(int16_t* block)
 {
     int32_t tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
     int32_t tmp10, tmp11, tmp12, tmp13;
     int32_t z1, z2, z3, z4, z5;
-
-    /* Even part */
-    tmp0 = data[0] + data[7];
-    tmp7 = data[0] - data[7];
-    tmp1 = data[1] + data[6];
-    tmp6 = data[1] - data[6];
-    tmp2 = data[2] + data[5];
-    tmp5 = data[2] - data[5];
-    tmp3 = data[3] + data[4];
-    tmp4 = data[3] - data[4];
-
-    tmp10 = tmp0 + tmp3;
-    tmp13 = tmp0 - tmp3;
-    tmp11 = tmp1 + tmp2;
-    tmp12 = tmp1 - tmp2;
-
-    data[0] = tmp10 + tmp11;
-    data[4] = tmp10 - tmp11;
-
-    z1 = (tmp12 + tmp13) * FIX_0_707106781;
-    data[2] = tmp13 + DESCALE(z1, CONST_BITS);
-    data[6] = tmp13 - DESCALE(z1, CONST_BITS);
-
-    /* Odd part */
-    tmp10 = tmp4 + tmp5;
-    tmp11 = tmp5 + tmp6;
-    tmp12 = tmp6 + tmp7;
-
-    z5 = (tmp10 - tmp12) * FIX_0_382683433;
-    z2 = tmp10 * FIX_0_541196100 + z5;
-    z4 = tmp12 * FIX_1_306562965 + z5;
-    z3 = tmp11 * FIX_0_707106781;
-
-    z1 = tmp7 + DESCALE(z3, CONST_BITS);
-    z2 = DESCALE(z2, CONST_BITS);
-    z3 = DESCALE(z3, CONST_BITS);
-    z4 = DESCALE(z4, CONST_BITS);
-
-    data[7] = tmp7 - z3 - z4;
-    data[5] = tmp7 - z3 + z2;
-    data[3] = z1 + z4;
-    data[1] = z1 + z2;
-}
-
-void prores_fdct_8x8(int16_t* block)
-{
+    int16_t* dataptr;
     int32_t workspace[64];
-    int32_t* wsptr = workspace;
-    int16_t* blkptr = block;
+    int32_t* wsptr;
     int ctr;
 
     /* Pass 1: process rows */
+    dataptr = block;
+    wsptr = workspace;
     for (ctr = 0; ctr < 8; ctr++) {
-        int32_t row[8];
-        row[0] = blkptr[0];
-        row[1] = blkptr[1];
-        row[2] = blkptr[2];
-        row[3] = blkptr[3];
-        row[4] = blkptr[4];
-        row[5] = blkptr[5];
-        row[6] = blkptr[6];
-        row[7] = blkptr[7];
+        tmp0 = dataptr[0] + dataptr[7];
+        tmp7 = dataptr[0] - dataptr[7];
+        tmp1 = dataptr[1] + dataptr[6];
+        tmp6 = dataptr[1] - dataptr[6];
+        tmp2 = dataptr[2] + dataptr[5];
+        tmp5 = dataptr[2] - dataptr[5];
+        tmp3 = dataptr[3] + dataptr[4];
+        tmp4 = dataptr[3] - dataptr[4];
 
-        fdct_1d(row);
+        /* Even part per LL&M figure 1 */
+        tmp10 = tmp0 + tmp3;
+        tmp13 = tmp0 - tmp3;
+        tmp11 = tmp1 + tmp2;
+        tmp12 = tmp1 - tmp2;
 
-        wsptr[0] = row[0] << PASS1_BITS;
-        wsptr[1] = row[1] << PASS1_BITS;
-        wsptr[2] = row[2] << PASS1_BITS;
-        wsptr[3] = row[3] << PASS1_BITS;
-        wsptr[4] = row[4] << PASS1_BITS;
-        wsptr[5] = row[5] << PASS1_BITS;
-        wsptr[6] = row[6] << PASS1_BITS;
-        wsptr[7] = row[7] << PASS1_BITS;
+        wsptr[0] = (tmp10 + tmp11) << PASS1_BITS;
+        wsptr[4] = (tmp10 - tmp11) << PASS1_BITS;
 
-        blkptr += 8;
+        z1 = MULTIPLY(tmp12 + tmp13, FIX_0_541196100);
+        wsptr[2] = DESCALE(z1 + MULTIPLY(tmp13, FIX_0_765366865), CONST_BITS - PASS1_BITS);
+        wsptr[6] = DESCALE(z1 - MULTIPLY(tmp12, FIX_1_847759065), CONST_BITS - PASS1_BITS);
+
+        /* Odd part per figure 8 */
+        z1 = tmp4 + tmp7;
+        z2 = tmp5 + tmp6;
+        z3 = tmp4 + tmp6;
+        z4 = tmp5 + tmp7;
+        z5 = MULTIPLY(z3 + z4, FIX_1_175875602);
+
+        tmp4 = MULTIPLY(tmp4, FIX_0_298631336);
+        tmp5 = MULTIPLY(tmp5, FIX_2_053119869);
+        tmp6 = MULTIPLY(tmp6, FIX_3_072711026);
+        tmp7 = MULTIPLY(tmp7, FIX_1_501321110);
+        z1 = MULTIPLY(z1, -FIX_0_899976223);
+        z2 = MULTIPLY(z2, -FIX_2_562915447);
+        z3 = MULTIPLY(z3, -FIX_1_961570560);
+        z4 = MULTIPLY(z4, -FIX_0_390180644);
+
+        z3 += z5;
+        z4 += z5;
+
+        wsptr[7] = DESCALE(tmp4 + z1 + z3, CONST_BITS - PASS1_BITS);
+        wsptr[5] = DESCALE(tmp5 + z2 + z4, CONST_BITS - PASS1_BITS);
+        wsptr[3] = DESCALE(tmp6 + z2 + z3, CONST_BITS - PASS1_BITS);
+        wsptr[1] = DESCALE(tmp7 + z1 + z4, CONST_BITS - PASS1_BITS);
+
+        dataptr += 8;
         wsptr += 8;
     }
 
     /* Pass 2: process columns */
     wsptr = workspace;
-    blkptr = block;
+    dataptr = block;
     for (ctr = 0; ctr < 8; ctr++) {
-        int32_t col[8];
-        col[0] = wsptr[0*8];
-        col[1] = wsptr[1*8];
-        col[2] = wsptr[2*8];
-        col[3] = wsptr[3*8];
-        col[4] = wsptr[4*8];
-        col[5] = wsptr[5*8];
-        col[6] = wsptr[6*8];
-        col[7] = wsptr[7*8];
+        tmp0 = wsptr[0*8] + wsptr[7*8];
+        tmp7 = wsptr[0*8] - wsptr[7*8];
+        tmp1 = wsptr[1*8] + wsptr[6*8];
+        tmp6 = wsptr[1*8] - wsptr[6*8];
+        tmp2 = wsptr[2*8] + wsptr[5*8];
+        tmp5 = wsptr[2*8] - wsptr[5*8];
+        tmp3 = wsptr[3*8] + wsptr[4*8];
+        tmp4 = wsptr[3*8] - wsptr[4*8];
 
-        fdct_1d(col);
+        /* Even part */
+        tmp10 = tmp0 + tmp3;
+        tmp13 = tmp0 - tmp3;
+        tmp11 = tmp1 + tmp2;
+        tmp12 = tmp1 - tmp2;
 
-        blkptr[0*8] = (int16_t)DESCALE(col[0], PASS1_BITS + 3);
-        blkptr[1*8] = (int16_t)DESCALE(col[1], PASS1_BITS + 3);
-        blkptr[2*8] = (int16_t)DESCALE(col[2], PASS1_BITS + 3);
-        blkptr[3*8] = (int16_t)DESCALE(col[3], PASS1_BITS + 3);
-        blkptr[4*8] = (int16_t)DESCALE(col[4], PASS1_BITS + 3);
-        blkptr[5*8] = (int16_t)DESCALE(col[5], PASS1_BITS + 3);
-        blkptr[6*8] = (int16_t)DESCALE(col[6], PASS1_BITS + 3);
-        blkptr[7*8] = (int16_t)DESCALE(col[7], PASS1_BITS + 3);
+        dataptr[0*8] = (int16_t)DESCALE(tmp10 + tmp11, PASS1_BITS + 3);
+        dataptr[4*8] = (int16_t)DESCALE(tmp10 - tmp11, PASS1_BITS + 3);
+
+        z1 = MULTIPLY(tmp12 + tmp13, FIX_0_541196100);
+        dataptr[2*8] = (int16_t)DESCALE(z1 + MULTIPLY(tmp13, FIX_0_765366865), CONST_BITS + PASS1_BITS + 3);
+        dataptr[6*8] = (int16_t)DESCALE(z1 - MULTIPLY(tmp12, FIX_1_847759065), CONST_BITS + PASS1_BITS + 3);
+
+        /* Odd part */
+        z1 = tmp4 + tmp7;
+        z2 = tmp5 + tmp6;
+        z3 = tmp4 + tmp6;
+        z4 = tmp5 + tmp7;
+        z5 = MULTIPLY(z3 + z4, FIX_1_175875602);
+
+        tmp4 = MULTIPLY(tmp4, FIX_0_298631336);
+        tmp5 = MULTIPLY(tmp5, FIX_2_053119869);
+        tmp6 = MULTIPLY(tmp6, FIX_3_072711026);
+        tmp7 = MULTIPLY(tmp7, FIX_1_501321110);
+        z1 = MULTIPLY(z1, -FIX_0_899976223);
+        z2 = MULTIPLY(z2, -FIX_2_562915447);
+        z3 = MULTIPLY(z3, -FIX_1_961570560);
+        z4 = MULTIPLY(z4, -FIX_0_390180644);
+
+        z3 += z5;
+        z4 += z5;
+
+        dataptr[7*8] = (int16_t)DESCALE(tmp4 + z1 + z3, CONST_BITS + PASS1_BITS + 3);
+        dataptr[5*8] = (int16_t)DESCALE(tmp5 + z2 + z4, CONST_BITS + PASS1_BITS + 3);
+        dataptr[3*8] = (int16_t)DESCALE(tmp6 + z2 + z3, CONST_BITS + PASS1_BITS + 3);
+        dataptr[1*8] = (int16_t)DESCALE(tmp7 + z1 + z4, CONST_BITS + PASS1_BITS + 3);
 
         wsptr++;
-        blkptr++;
+        dataptr++;
     }
 }
 
