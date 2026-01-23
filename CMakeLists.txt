@@ -66,7 +66,7 @@ if(EMSCRIPTEN)
         "-s INITIAL_MEMORY=67108864"
         "-s MAXIMUM_MEMORY=536870912"
         "-s EXPORTED_FUNCTIONS='[${EXPORTED_FUNCTIONS_STR}]'"
-        "-s EXPORTED_RUNTIME_METHODS='[\"ccall\",\"cwrap\",\"getValue\",\"setValue\",\"UTF8ToString\"]'"
+        "-s EXPORTED_RUNTIME_METHODS='[\"ccall\",\"cwrap\",\"getValue\",\"setValue\",\"UTF8ToString\",\"HEAPU8\",\"HEAPU32\"]'"
         "-s NO_EXIT_RUNTIME=1"
         "-s FILESYSTEM=0"
         "-O3"
