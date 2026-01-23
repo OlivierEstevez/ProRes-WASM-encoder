@@ -214,7 +214,7 @@ MIT License
 
 - Based on ProRes codec reverse engineering by FFmpeg project
 - MOV container format based on Apple QuickTime File Format specification
-- Inspired by [h264-mp4-encoder](https://github.com/ArnoldoRios/h264-mp4-encoder) architecture
+- Inspired by [h264-mp4-encoder](https://github.com/TrevorSundberg/h264-mp4-encoder) architecture
 
 ## Related Projects
 
