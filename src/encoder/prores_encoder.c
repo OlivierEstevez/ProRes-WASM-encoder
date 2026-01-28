@@ -383,17 +383,20 @@ static void encode_dc_coeffs(PutBitContext* pb, int16_t blocks[][64], int num_bl
     int codebook_idx = 5;
     int sign = 0;
     int scale = qmat[0] * q_scale;
+    int half_scale = scale >> 1;
     int16_t* flat = &blocks[0][0];
 
     if (scale < 1) scale = 1;
 
-    /* First DC uses the fixed codebook */
-    prev_dc = flat[0] / scale;
+    /* First DC uses the fixed codebook - with rounding */
+    int dc0 = flat[0];
+    prev_dc = (dc0 + (dc0 < 0 ? -half_scale : half_scale)) / scale;
     prores_encode_dc(pb, -1, prev_dc);
     flat += 64;
 
     for (int b = 1; b < num_blocks; b++, flat += 64) {
-        int dc = flat[0] / scale;
+        int dc_raw = flat[0];
+        int dc = (dc_raw + (dc_raw < 0 ? -half_scale : half_scale)) / scale;
         int delta = dc - prev_dc;
         int new_sign = (delta < 0) ? -1 : 0;
         delta = (delta ^ sign) - sign;
@@ -422,8 +425,11 @@ static void encode_ac_coeffs_all(PutBitContext* pb, int16_t blocks[][64], int nu
         /* qmat is in scan order, so use qmat[i] for scan position i */
         int q = qmat[i] * q_scale;
         if (q < 1) q = 1;
+        int half_q = q >> 1;
         for (int idx = scan[i]; idx < max_coeffs; idx += 64) {
-            int level = flat[idx] / q;
+            /* Round to nearest (like FFmpeg) instead of truncating */
+            int coeff = flat[idx];
+            int level = (coeff + (coeff < 0 ? -half_q : half_q)) / q;
             if (level) {
                 int abs_level = (level < 0) ? -level : level;
                 prores_encode_run(pb, prev_run, run);
@@ -475,7 +481,7 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
     int chroma_block_count = 0;
 
     /* First pass: DCT and quantize all luma blocks
-     * Block order within macroblock: row-major (TL, TR, BL, BR) */
+     * Block order: row-major (TL, TR, BL, BR) */
     for (mb_x = 0; mb_x < slice_width; mb_x++) {
         int pixel_x = (slice_mb_x + mb_x) * MB_SIZE;
         int pixel_y = mb_y * MB_SIZE;
