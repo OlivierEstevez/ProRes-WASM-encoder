@@ -129,8 +129,9 @@ int prores_wasm_add_frame_rgba(void* ctx_ptr, const uint8_t* rgba_ptr)
     ProResWasmContext* ctx = (ProResWasmContext*)ctx_ptr;
     if (!ctx || !rgba_ptr) return -1;
 
-    /* Convert RGBA to YUV based on profile */
-    int bit_depth = (ctx->profile >= 4) ? 12 : 10;
+    /* Convert RGBA to YUV based on profile.
+     * Always use 10-bit, matching FFmpeg's encoder (bits_per_raw_sample = 10). */
+    int bit_depth = 10;
     if (ctx->profile >= 4) {
         /* 4:4:4 profiles */
         if (ctx->profile == 4 || ctx->profile == 5) {

@@ -201,7 +201,9 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
     if (ctx->q_scale < 1) ctx->q_scale = 1;
     if (ctx->q_scale > 16) ctx->q_scale = 16;
 
-    ctx->bit_depth = is_444_profile(config->profile) ? 12 : 10;
+    /* Always use 10-bit internally, matching FFmpeg (avctx->bits_per_raw_sample = 10).
+     * This ensures DCT coefficients fit in int16_t (max DC = 32 * 1023 = 32736). */
+    ctx->bit_depth = 10;
     ctx->sample_center = 1 << (ctx->bit_depth - 1);
 
     /* Copy quantization matrix */
@@ -344,22 +346,23 @@ static int write_frame_header(ProResEncoderContext* ctx, uint8_t* buf)
     return total_frame_header;  /* Return offset to picture header (156) */
 }
 
-/* DCT into raster order (ProRes quantization happens during VLC) */
-static void dct_block(const int16_t* src, int stride, int16_t* dst, int sample_center)
+/* DCT into raster order (ProRes quantization happens during VLC)
+ * Input pixels are unsigned 10-bit values (0-1023), NOT centered.
+ * Matches FFmpeg: raw pixel values go directly into DCT,
+ * DC offset (0x4000) is subtracted during encoding. */
+static void dct_block(const int16_t* src, int stride, int16_t* dst)
 {
     int16_t block[64];
     int i, j;
 
-    /* Copy to contiguous block and center to signed range */
     for (i = 0; i < 8; i++) {
         for (j = 0; j < 8; j++) {
-            block[i * 8 + j] = src[i * stride + j] - sample_center;
+            block[i * 8 + j] = src[i * stride + j];
         }
     }
 
     prores_fdct_8x8(block);
 
-    /* Copy in raster order */
     for (i = 0; i < 64; i++) {
         dst[i] = block[i];
     }
@@ -385,14 +388,16 @@ static void encode_dc_coeffs(PutBitContext* pb, int16_t blocks[][64], int num_bl
 
     if (scale < 1) scale = 1;
 
-    /* First DC uses the fixed codebook - with rounding */
-    int dc0 = flat[0];
+    /* First DC uses the fixed codebook - with rounding.
+     * Subtract 0x4000 DC offset (matches FFmpeg's encode_dcs).
+     * The decoder IDCT adds back the equivalent bias (8192 between passes). */
+    int dc0 = flat[0] - 0x4000;
     prev_dc = (dc0 + (dc0 < 0 ? -half_scale : half_scale)) / scale;
     prores_encode_dc(pb, -1, prev_dc);
     flat += 64;
 
     for (int b = 1; b < num_blocks; b++, flat += 64) {
-        int dc_raw = flat[0];
+        int dc_raw = flat[0] - 0x4000;
         int dc = (dc_raw + (dc_raw < 0 ? -half_scale : half_scale)) / scale;
         int delta = dc - prev_dc;
         int new_sign = (delta < 0) ? -1 : 0;
@@ -488,8 +493,7 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
 
                 dct_block(ctx->y_plane + by * ctx->padded_width + bx,
                           ctx->padded_width,
-                          luma_blocks[luma_block_count],
-                          ctx->sample_center);
+                          luma_blocks[luma_block_count]);
                 luma_block_count++;
             }
         }
@@ -523,8 +527,7 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
 
                     dct_block(ctx->u_plane + by * ctx->padded_width + bx,
                               ctx->padded_width,
-                              u_blocks[chroma_block_count],
-                              ctx->sample_center);
+                              u_blocks[chroma_block_count]);
                     chroma_block_count++;
                 }
             }
@@ -536,8 +539,7 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
 
                 dct_block(ctx->u_plane + by * chroma_width + bx,
                           chroma_width,
-                          u_blocks[chroma_block_count],
-                          ctx->sample_center);
+                          u_blocks[chroma_block_count]);
                 chroma_block_count++;
             }
         }
@@ -572,8 +574,7 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
 
                     dct_block(ctx->v_plane + by * ctx->padded_width + bx,
                               ctx->padded_width,
-                              v_blocks[v_block_count],
-                              ctx->sample_center);
+                              v_blocks[v_block_count]);
                     v_block_count++;
                 }
             }
@@ -585,8 +586,7 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
 
                 dct_block(ctx->v_plane + by * chroma_width + bx,
                           chroma_width,
-                          v_blocks[v_block_count],
-                          ctx->sample_center);
+                          v_blocks[v_block_count]);
                 v_block_count++;
             }
         }
