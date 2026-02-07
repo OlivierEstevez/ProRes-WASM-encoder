@@ -137,7 +137,6 @@ struct ProResEncoderContext {
     uint8_t* slice_luma_buf;
     uint8_t* slice_u_buf;
     uint8_t* slice_v_buf;
-    uint8_t* slice_a_buf;
     size_t slice_buf_capacity;
 
     /* State */
@@ -234,11 +233,9 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
     ctx->slice_luma_buf = (uint8_t*)malloc(ctx->slice_buf_capacity);
     ctx->slice_u_buf = (uint8_t*)malloc(ctx->slice_buf_capacity);
     ctx->slice_v_buf = (uint8_t*)malloc(ctx->slice_buf_capacity);
-    ctx->slice_a_buf = (uint8_t*)malloc(ctx->slice_buf_capacity);
 
     if (!ctx->y_plane || !ctx->u_plane || !ctx->v_plane || !ctx->dct_block ||
-        !ctx->output_buf || !ctx->slice_luma_buf || !ctx->slice_u_buf ||
-        !ctx->slice_v_buf || !ctx->slice_a_buf) {
+        !ctx->output_buf || !ctx->slice_luma_buf || !ctx->slice_u_buf || !ctx->slice_v_buf) {
         prores_encoder_destroy(ctx);
         return NULL;
     }
@@ -319,8 +316,8 @@ static int write_frame_header(ProResEncoderContext* ctx, uint8_t* buf)
     /* Matrix coefficients (1=BT.709) */
     *p++ = (ctx->config.colorspace == PRORES_CS_BT2020) ? 9 : 1;
 
-    /* Alpha configuration byte (FFmpeg format: 0x02 for 16-bit alpha) */
-    *p++ = is_444 ? 0x02 : 0x00;
+    /* Alpha configuration byte (FFmpeg format: 0x00 for no alpha) */
+    *p++ = 0x00;
 
     /* Reserved byte */
     *p++ = 0x00;
@@ -469,13 +466,11 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
     int16_t luma_blocks[MAX_BLOCKS_PER_SLICE][64];
     int16_t u_blocks[MAX_BLOCKS_PER_SLICE][64];
     int16_t v_blocks[MAX_BLOCKS_PER_SLICE][64];
-    int16_t a_blocks[MAX_BLOCKS_PER_SLICE][64];
 
     /* Temporary buffers for encoded plane data (heap-backed to avoid WASM stack overflow) */
     uint8_t* luma_data = ctx->slice_luma_buf;
     uint8_t* u_data = ctx->slice_u_buf;
     uint8_t* v_data = ctx->slice_v_buf;
-    uint8_t* a_data = ctx->slice_a_buf;
 
     int luma_block_count = 0;
     int chroma_block_count = 0;
@@ -520,7 +515,7 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
         int pixel_y = mb_y * MB_SIZE;
 
         if (is_444) {
-            /* 4444: use column-major block order (TL, BL, TR, BR) */
+            /* 4444: column-major block order (TL, BL, TR, BR) */
             for (block_x = 0; block_x < 2; block_x++) {
                 for (block_y = 0; block_y < 2; block_y++) {
                     int bx = pixel_x + block_x * 8;
@@ -569,7 +564,7 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
         int pixel_y = mb_y * MB_SIZE;
 
         if (is_444) {
-            /* 4444: use column-major block order (TL, BL, TR, BR) */
+            /* 4444: column-major block order (TL, BL, TR, BR) */
             for (block_x = 0; block_x < 2; block_x++) {
                 for (block_y = 0; block_y < 2; block_y++) {
                     int bx = pixel_x + block_x * 8;
@@ -611,59 +606,11 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
     int v_size = (put_bits_count(&v_pb) + 7) / 8;
     if ((size_t)v_size > ctx->slice_buf_capacity) return -1;
 
-    /* For 4444 profiles, DCT and encode alpha blocks */
-    int a_size = 0;
-    if (is_444 && ctx->a_plane) {
-        int a_block_count = 0;
-        for (mb_x = 0; mb_x < slice_width; mb_x++) {
-            int pixel_x = (slice_mb_x + mb_x) * MB_SIZE;
-            int pixel_y = mb_y * MB_SIZE;
-
-            /* 4444: use column-major block order (TL, BL, TR, BR) */
-            for (block_x = 0; block_x < 2; block_x++) {
-                for (block_y = 0; block_y < 2; block_y++) {
-                    int bx = pixel_x + block_x * 8;
-                    int by = pixel_y + block_y * 8;
-
-                    dct_block(ctx->a_plane + by * ctx->padded_width + bx,
-                              ctx->padded_width,
-                              a_blocks[a_block_count],
-                              ctx->sample_center);
-                    a_block_count++;
-                }
-            }
-        }
-
-        /* Encode alpha to temp buffer */
-        PutBitContext a_pb;
-        init_put_bits(&a_pb, a_data, ctx->slice_buf_capacity);
-        encode_dc_coeffs(&a_pb, a_blocks, a_block_count, ctx->quant_matrix, ctx->q_scale);
-        encode_ac_coeffs_all(&a_pb, a_blocks, a_block_count,
-                             prores_scan, ctx->quant_matrix, ctx->q_scale);
-
-        /* Byte-align alpha */
-        int a_bits = put_bits_count(&a_pb);
-        if (a_bits % 8) put_bits(&a_pb, 8 - (a_bits % 8), 0);
-        flush_put_bits(&a_pb);
-        a_size = (put_bits_count(&a_pb) + 7) / 8;
-        if ((size_t)a_size > ctx->slice_buf_capacity) return -1;
-    }
-
     /* Now write slice header with known sizes */
-    if (is_444) {
-        /* 4444 slice header: 8 bytes (64 bits) */
-        put_bits(pb, 8, 64);  /* slice_hdr_size = 64 bits = 8 bytes */
-        put_bits(pb, 8, ctx->q_scale);  /* scale_factor */
-        put_bits(pb, 16, luma_size);    /* luma_data_size */
-        put_bits(pb, 16, u_size);       /* u_data_size */
-        put_bits(pb, 16, v_size);       /* v_data_size (4444 only) */
-    } else {
-        /* 422 slice header: 6 bytes (48 bits) */
-        put_bits(pb, 8, 48);  /* slice_hdr_size = 48 bits = 6 bytes */
-        put_bits(pb, 8, ctx->q_scale);  /* scale_factor */
-        put_bits(pb, 16, luma_size);    /* luma_data_size */
-        put_bits(pb, 16, u_size);       /* u_data_size */
-    }
+    put_bits(pb, 8, 48);  /* slice_hdr_size = 48 bits = 6 bytes */
+    put_bits(pb, 8, ctx->q_scale);  /* scale_factor */
+    put_bits(pb, 16, luma_size);    /* luma_data_size */
+    put_bits(pb, 16, u_size);       /* u_data_size */
 
     /* Write plane data byte by byte */
     for (int i = 0; i < luma_size; i++) {
@@ -674,12 +621,6 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
     }
     for (int i = 0; i < v_size; i++) {
         put_bits(pb, 8, v_data[i]);
-    }
-    /* Write alpha data for 4444 profiles */
-    if (is_444 && ctx->a_plane) {
-        for (int i = 0; i < a_size; i++) {
-            put_bits(pb, 8, a_data[i]);
-        }
     }
 
     return 0;
@@ -822,17 +763,8 @@ int prores_encoder_encode_frame(
                 slice_width = ctx->mb_width - slice_mb_x;
             }
 
-            /* Slice data is byte-oriented; ensure byte alignment at slice boundaries */
-            int start_bits = put_bits_count(&pb);
-            if (start_bits % 8) {
-                put_bits(&pb, 8 - (start_bits % 8), 0);
-            }
             int start_offset = put_bits_count(&pb) / 8;
             encode_slice(ctx, &pb, slice_mb_x, slice_y, slice_width);
-            int end_bits = put_bits_count(&pb);
-            if (end_bits % 8) {
-                put_bits(&pb, 8 - (end_bits % 8), 0);
-            }
             int end_offset = put_bits_count(&pb) / 8;
             slice_sizes[slice_idx++] = end_offset - start_offset;
         }
@@ -908,7 +840,6 @@ void prores_encoder_destroy(ProResEncoderContext* ctx)
     free(ctx->slice_luma_buf);
     free(ctx->slice_u_buf);
     free(ctx->slice_v_buf);
-    free(ctx->slice_a_buf);
     free(ctx);
 }
 
