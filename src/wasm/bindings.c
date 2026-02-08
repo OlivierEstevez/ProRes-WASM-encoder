@@ -129,18 +129,17 @@ int prores_wasm_add_frame_rgba(void* ctx_ptr, const uint8_t* rgba_ptr)
     ProResWasmContext* ctx = (ProResWasmContext*)ctx_ptr;
     if (!ctx || !rgba_ptr) return -1;
 
-    /* Convert RGBA to YUV based on profile */
-    int bit_depth = (ctx->profile >= 4) ? 12 : 10;
+    /* Convert RGBA to YUV based on profile (always 10-bit output) */
     if (ctx->profile >= 4) {
         /* 4:4:4 profiles */
         if (ctx->profile == 4 || ctx->profile == 5) {
-            rgba_to_yuva444p10(rgba_ptr, ctx->yuv_buffer, ctx->width, ctx->height, bit_depth, ctx->range);
+            rgba_to_yuva444p10(rgba_ptr, ctx->yuv_buffer, ctx->width, ctx->height, ctx->range);
         } else {
-            rgba_to_yuv444p10(rgba_ptr, ctx->yuv_buffer, ctx->width, ctx->height, bit_depth, ctx->range);
+            rgba_to_yuv444p10(rgba_ptr, ctx->yuv_buffer, ctx->width, ctx->height, ctx->range);
         }
     } else {
         /* 4:2:2 profiles */
-        rgba_to_yuv422p10(rgba_ptr, ctx->yuv_buffer, ctx->width, ctx->height, bit_depth, ctx->range);
+        rgba_to_yuv422p10(rgba_ptr, ctx->yuv_buffer, ctx->width, ctx->height, ctx->range);
     }
 
     /* Encode frame */

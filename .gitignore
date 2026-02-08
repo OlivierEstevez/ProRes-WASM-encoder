@@ -11,3 +11,6 @@ test/outputs/
 test/diffs/
 test/binaries/
 test/dist
+
+# FFmpeg reference source
+FFmpeg-master/

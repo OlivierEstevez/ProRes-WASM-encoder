@@ -24,7 +24,8 @@
 #define FIX_3_072711026  25172
 
 #define CONST_BITS  13
-#define PASS1_BITS  2
+#define PASS1_BITS  1
+#define OUT_SHIFT   (PASS1_BITS + 1)
 
 #define MULTIPLY(a, b)  ((int32_t)(a) * (int32_t)(b))
 #define DESCALE(x, n)  (((x) + (1 << ((n) - 1))) >> (n))
@@ -116,12 +117,12 @@ void prores_fdct_8x8(int16_t* block)
         tmp11 = tmp1 + tmp2;
         tmp12 = tmp1 - tmp2;
 
-        dataptr[0*8] = (int16_t)DESCALE(tmp10 + tmp11, PASS1_BITS + 3);
-        dataptr[4*8] = (int16_t)DESCALE(tmp10 - tmp11, PASS1_BITS + 3);
+        dataptr[0*8] = (int16_t)DESCALE(tmp10 + tmp11, OUT_SHIFT);
+        dataptr[4*8] = (int16_t)DESCALE(tmp10 - tmp11, OUT_SHIFT);
 
         z1 = MULTIPLY(tmp12 + tmp13, FIX_0_541196100);
-        dataptr[2*8] = (int16_t)DESCALE(z1 + MULTIPLY(tmp13, FIX_0_765366865), CONST_BITS + PASS1_BITS + 3);
-        dataptr[6*8] = (int16_t)DESCALE(z1 - MULTIPLY(tmp12, FIX_1_847759065), CONST_BITS + PASS1_BITS + 3);
+        dataptr[2*8] = (int16_t)DESCALE(z1 + MULTIPLY(tmp13, FIX_0_765366865), CONST_BITS + OUT_SHIFT);
+        dataptr[6*8] = (int16_t)DESCALE(z1 - MULTIPLY(tmp12, FIX_1_847759065), CONST_BITS + OUT_SHIFT);
 
         /* Odd part */
         z1 = tmp4 + tmp7;
@@ -142,10 +143,10 @@ void prores_fdct_8x8(int16_t* block)
         z3 += z5;
         z4 += z5;
 
-        dataptr[7*8] = (int16_t)DESCALE(tmp4 + z1 + z3, CONST_BITS + PASS1_BITS + 3);
-        dataptr[5*8] = (int16_t)DESCALE(tmp5 + z2 + z4, CONST_BITS + PASS1_BITS + 3);
-        dataptr[3*8] = (int16_t)DESCALE(tmp6 + z2 + z3, CONST_BITS + PASS1_BITS + 3);
-        dataptr[1*8] = (int16_t)DESCALE(tmp7 + z1 + z4, CONST_BITS + PASS1_BITS + 3);
+        dataptr[7*8] = (int16_t)DESCALE(tmp4 + z1 + z3, CONST_BITS + OUT_SHIFT);
+        dataptr[5*8] = (int16_t)DESCALE(tmp5 + z2 + z4, CONST_BITS + OUT_SHIFT);
+        dataptr[3*8] = (int16_t)DESCALE(tmp6 + z2 + z3, CONST_BITS + OUT_SHIFT);
+        dataptr[1*8] = (int16_t)DESCALE(tmp7 + z1 + z4, CONST_BITS + OUT_SHIFT);
 
         wsptr++;
         dataptr++;

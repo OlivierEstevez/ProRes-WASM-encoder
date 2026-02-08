@@ -79,11 +79,11 @@ static const uint8_t quant_matrix_hq[64] = {
     4, 4, 4, 4, 4, 4, 4, 4,
     4, 4, 4, 4, 4, 4, 4, 4,
     4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 5,
+    4, 4, 4, 4, 4, 4, 5, 5,
+    4, 4, 4, 4, 4, 5, 5, 6,
+    4, 4, 4, 4, 5, 5, 6, 7,
+    4, 4, 4, 4, 5, 6, 7, 7,
 };
 
 /* ProRes progressive scan order (FFmpeg compatible) */
@@ -137,6 +137,8 @@ struct ProResEncoderContext {
     uint8_t* slice_luma_buf;
     uint8_t* slice_u_buf;
     uint8_t* slice_v_buf;
+    uint8_t* slice_alpha_buf;    /* Encoded alpha temp buffer */
+    uint16_t* alpha_pixel_buf;   /* Raw alpha pixels for one slice */
     size_t slice_buf_capacity;
 
     /* State */
@@ -201,7 +203,9 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
     if (ctx->q_scale < 1) ctx->q_scale = 1;
     if (ctx->q_scale > 16) ctx->q_scale = 16;
 
-    ctx->bit_depth = is_444_profile(config->profile) ? 12 : 10;
+    /* Always use 10-bit internally, matching FFmpeg (avctx->bits_per_raw_sample = 10).
+     * This ensures DCT coefficients fit in int16_t (max DC = 32 * 1023 = 32736). */
+    ctx->bit_depth = 10;
     ctx->sample_center = 1 << (ctx->bit_depth - 1);
 
     /* Copy quantization matrix */
@@ -234,13 +238,19 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
     ctx->slice_u_buf = (uint8_t*)malloc(ctx->slice_buf_capacity);
     ctx->slice_v_buf = (uint8_t*)malloc(ctx->slice_buf_capacity);
 
+    if (is_444_profile(config->profile)) {
+        ctx->slice_alpha_buf = (uint8_t*)malloc(MAX_PLANE_DATA_SIZE);
+        /* Max alpha pixels per slice: slice_mb_width * 16 * 16 (16 rows x 16*N cols) */
+        ctx->alpha_pixel_buf = (uint16_t*)malloc(ctx->slice_mb_width * 256 * sizeof(uint16_t));
+    }
+
     if (!ctx->y_plane || !ctx->u_plane || !ctx->v_plane || !ctx->dct_block ||
         !ctx->output_buf || !ctx->slice_luma_buf || !ctx->slice_u_buf || !ctx->slice_v_buf) {
         prores_encoder_destroy(ctx);
         return NULL;
     }
 
-    if (is_444_profile(config->profile) && !ctx->a_plane) {
+    if (is_444_profile(config->profile) && (!ctx->a_plane || !ctx->slice_alpha_buf || !ctx->alpha_pixel_buf)) {
         prores_encoder_destroy(ctx);
         return NULL;
     }
@@ -297,8 +307,7 @@ static int write_frame_header(ProResEncoderContext* ctx, uint8_t* buf)
      * - bits 3-2: interlace_mode (0=progressive, 1=TFF, 2=BFF)
      * - bits 1-0: alpha_info (0=none, 1=8-bit, 2=16-bit) */
     int chroma = is_444 ? 3 : 2;  /* 2 = 4:2:2, 3 = 4:4:4 */
-    int alpha_info = 0;  /* 0 = no alpha, 1 = 8-bit alpha, 2 = 16-bit alpha */
-    if (is_444) alpha_info = 2;  /* 16-bit alpha for 4444 profiles */
+    int alpha_info = 0;  /* FFmpeg leaves this 0 even with alpha; alpha_config byte is authoritative */
     int interlace = 0;  /* 0 = progressive */
     if (ctx->config.frame_type == PRORES_FRAME_INTERLACED_TFF) interlace = 1;
     else if (ctx->config.frame_type == PRORES_FRAME_INTERLACED_BFF) interlace = 2;
@@ -307,17 +316,17 @@ static int write_frame_header(ProResEncoderContext* ctx, uint8_t* buf)
     /* Reserved */
     *p++ = 0;
 
-    /* Color primaries (1=BT.709, 9=BT.2020) */
-    *p++ = (ctx->config.colorspace == PRORES_CS_BT2020) ? 9 : 1;
+    /* Color primaries (2=unspecified, matches FFmpeg prores_ks default; 9=BT.2020) */
+    *p++ = (ctx->config.colorspace == PRORES_CS_BT2020) ? 9 : 2;
 
-    /* Transfer function (1=BT.709) */
-    *p++ = (ctx->config.colorspace == PRORES_CS_BT2020) ? 14 : 1;
+    /* Transfer function (2=unspecified, matches FFmpeg; 14=BT.2020) */
+    *p++ = (ctx->config.colorspace == PRORES_CS_BT2020) ? 14 : 2;
 
-    /* Matrix coefficients (1=BT.709) */
-    *p++ = (ctx->config.colorspace == PRORES_CS_BT2020) ? 9 : 1;
+    /* Matrix coefficients (2=unspecified, matches FFmpeg; 9=BT.2020) */
+    *p++ = (ctx->config.colorspace == PRORES_CS_BT2020) ? 9 : 2;
 
-    /* Alpha configuration byte (FFmpeg format: 0x00 for no alpha) */
-    *p++ = 0x00;
+    /* Alpha configuration byte (matches FFmpeg: 0x00=none, 0x02=16-bit alpha) */
+    *p++ = is_444 ? 0x02 : 0x00;
 
     /* Reserved byte */
     *p++ = 0x00;
@@ -344,22 +353,23 @@ static int write_frame_header(ProResEncoderContext* ctx, uint8_t* buf)
     return total_frame_header;  /* Return offset to picture header (156) */
 }
 
-/* DCT into raster order (ProRes quantization happens during VLC) */
-static void dct_block(const int16_t* src, int stride, int16_t* dst, int sample_center)
+/* DCT into raster order (ProRes quantization happens during VLC)
+ * Input pixels are unsigned 10-bit values (0-1023), NOT centered.
+ * Matches FFmpeg: raw pixel values go directly into DCT,
+ * DC offset (0x4000) is subtracted during encoding. */
+static void dct_block(const int16_t* src, int stride, int16_t* dst)
 {
     int16_t block[64];
     int i, j;
 
-    /* Copy to contiguous block and center to signed range */
     for (i = 0; i < 8; i++) {
         for (j = 0; j < 8; j++) {
-            block[i * 8 + j] = src[i * stride + j] - sample_center;
+            block[i * 8 + j] = src[i * stride + j];
         }
     }
 
     prores_fdct_8x8(block);
 
-    /* Copy in raster order */
     for (i = 0; i < 64; i++) {
         dst[i] = block[i];
     }
@@ -384,13 +394,17 @@ static void encode_dc_coeffs(PutBitContext* pb, int16_t blocks[][64], int num_bl
 
     if (scale < 1) scale = 1;
 
-    /* First DC uses the fixed codebook */
-    prev_dc = flat[0] / scale;
+    /* First DC uses the fixed codebook.
+     * Subtract 0x4000 DC offset (matches FFmpeg's encode_dcs).
+     * Uses truncation (plain integer division), matching FFmpeg. */
+    int dc0 = flat[0] - 0x4000;
+    prev_dc = dc0 / scale;
     prores_encode_dc(pb, -1, prev_dc);
     flat += 64;
 
     for (int b = 1; b < num_blocks; b++, flat += 64) {
-        int dc = flat[0] / scale;
+        int dc_raw = flat[0] - 0x4000;
+        int dc = dc_raw / scale;
         int delta = dc - prev_dc;
         int new_sign = (delta < 0) ? -1 : 0;
         delta = (delta ^ sign) - sign;
@@ -419,6 +433,7 @@ static void encode_ac_coeffs_all(PutBitContext* pb, int16_t blocks[][64], int nu
         int q = qmat[scan[i]] * q_scale;
         if (q < 1) q = 1;
         for (int idx = scan[i]; idx < max_coeffs; idx += 64) {
+            /* Truncation (plain integer division), matching FFmpeg's encode_acs */
             int level = flat[idx] / q;
             if (level) {
                 int abs_level = (level < 0) ? -level : level;
@@ -438,12 +453,117 @@ static void encode_ac_coeffs_all(PutBitContext* pb, int16_t blocks[][64], int nu
     (void)run;
 }
 
+/*
+ * Alpha encoding helpers for ProRes 4444
+ * ProRes alpha uses per-pixel differential coding with run-length encoding,
+ * NOT DCT+VLC like the YUV planes.
+ */
+
+/* Encode one alpha pixel difference */
+static void put_alpha_diff(PutBitContext* pb, int cur, int prev, int abits)
+{
+    int dbits = (abits == 16) ? 7 : 4;
+    int dsize = 1 << (dbits - 1);  /* 64 for 16-bit */
+    int mask = (1 << abits) - 1;
+
+    /* Compute unsigned wrapped difference */
+    int diff = (cur - prev) & mask;
+
+    /* Convert to signed range */
+    if (diff >= (1 << abits) - dsize)
+        diff -= (1 << abits);
+
+    if (diff < -dsize || diff > dsize || diff == 0) {
+        /* Full path: 1 flag bit + abits of unsigned wrapped value */
+        put_bits(pb, 1, 1);
+        if (abits > 25) {
+            put_bits(pb, abits - 25, (unsigned)((cur - prev) & mask) >> 25);
+            put_bits(pb, 25, (unsigned)((cur - prev) & mask) & ((1 << 25) - 1));
+        } else {
+            put_bits(pb, abits, (unsigned)((cur - prev) & mask));
+        }
+    } else {
+        /* Short path: 0 flag + (dbits-1) magnitude bits + 1 sign bit = dbits+1 bits total */
+        int abs_diff = (diff < 0) ? -diff : diff;
+        int sign = (diff < 0) ? 1 : 0;
+        put_bits(pb, 1, 0);
+        put_bits(pb, dbits - 1, abs_diff - 1);
+        put_bits(pb, 1, sign);
+    }
+}
+
+/* Encode a run of identical alpha pixels */
+static void put_alpha_run(PutBitContext* pb, int run)
+{
+    if (run == 0) {
+        put_bits(pb, 1, 1);  /* No run */
+    } else if (run < 16) {
+        put_bits(pb, 1, 0);
+        put_bits(pb, 4, run);
+    } else {
+        put_bits(pb, 1, 0);
+        put_bits(pb, 15, run);
+    }
+}
+
+/* Encode all alpha pixels for one slice */
+static void encode_alpha_plane(PutBitContext* pb, const uint16_t* alpha_pixels,
+                               int num_pixels, int abits)
+{
+    int mask = (1 << abits) - 1;
+    int prev = mask;  /* Initial previous value = all-ones (0xFFFF for 16-bit) */
+    int run = 0;
+    int i;
+
+    if (num_pixels <= 0) return;
+
+    /* First pixel: always encode diff, no run */
+    put_alpha_diff(pb, alpha_pixels[0], prev, abits);
+    prev = alpha_pixels[0];
+
+    for (i = 1; i < num_pixels; i++) {
+        if (alpha_pixels[i] == prev) {
+            run++;
+        } else {
+            /* Flush accumulated run, then encode the new diff */
+            put_alpha_run(pb, run);
+            put_alpha_diff(pb, alpha_pixels[i], prev, abits);
+            prev = alpha_pixels[i];
+            run = 0;
+        }
+    }
+
+    /* Flush final run */
+    put_alpha_run(pb, run);
+}
+
+/* Extract alpha pixels from a_plane in raster order for one slice.
+ * Scales 10-bit (0-1023) to 16-bit (0-65535). */
+static int get_alpha_data(const int16_t* a_plane, int stride,
+                          int pixel_x, int pixel_y,
+                          int slice_pixel_w, int padded_height,
+                          uint16_t* out_buf)
+{
+    int count = 0;
+    for (int y = 0; y < 16; y++) {
+        int src_y = pixel_y + y;
+        if (src_y >= padded_height) src_y = padded_height - 1;
+        for (int x = 0; x < slice_pixel_w; x++) {
+            int src_x = pixel_x + x;
+            int val = a_plane[src_y * stride + src_x];
+            if (val < 0) val = 0;
+            if (val > 1023) val = 1023;
+            /* Scale 10-bit to 16-bit: (val << 6) | (val >> 4) */
+            out_buf[count++] = (uint16_t)((val << 6) | (val >> 4));
+        }
+    }
+    return count;
+}
+
 /* Encode a single slice with proper slice header
  * ProRes slice structure:
- *   - Slice header: 6 bytes (hdr_size, scale, luma_size, u_size)
- *   - Luma data: all Y blocks for all MBs in slice
- *   - Chroma U data: all Cb blocks
- *   - Chroma V data: all Cr blocks (size = total - header - luma - u)
+ *   422:  6-byte header (hdr_size, scale, luma_size, u_size) + Y + U + V
+ *   4444: 8-byte header (hdr_size, scale, luma_size, u_size, v_size) + Y + U + V + Alpha
  *
  * We encode each plane to a temp buffer first to get sizes, then write header + data
  */
@@ -468,7 +588,8 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
     int luma_block_count = 0;
     int chroma_block_count = 0;
 
-    /* First pass: DCT and quantize all luma blocks */
+    /* First pass: DCT and quantize all luma blocks
+     * Block order: row-major (TL, TR, BL, BR) */
     for (mb_x = 0; mb_x < slice_width; mb_x++) {
         int pixel_x = (slice_mb_x + mb_x) * MB_SIZE;
         int pixel_y = mb_y * MB_SIZE;
@@ -480,8 +601,7 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
 
                 dct_block(ctx->y_plane + by * ctx->padded_width + bx,
                           ctx->padded_width,
-                          luma_blocks[luma_block_count],
-                          ctx->sample_center);
+                          luma_blocks[luma_block_count]);
                 luma_block_count++;
             }
         }
@@ -507,15 +627,15 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
         int pixel_y = mb_y * MB_SIZE;
 
         if (is_444) {
-            for (block_y = 0; block_y < 2; block_y++) {
-                for (block_x = 0; block_x < 2; block_x++) {
+            /* 4444: column-major block order (TL, BL, TR, BR) */
+            for (block_x = 0; block_x < 2; block_x++) {
+                for (block_y = 0; block_y < 2; block_y++) {
                     int bx = pixel_x + block_x * 8;
                     int by = pixel_y + block_y * 8;
 
                     dct_block(ctx->u_plane + by * ctx->padded_width + bx,
                               ctx->padded_width,
-                              u_blocks[chroma_block_count],
-                              ctx->sample_center);
+                              u_blocks[chroma_block_count]);
                     chroma_block_count++;
                 }
             }
@@ -527,8 +647,7 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
 
                 dct_block(ctx->u_plane + by * chroma_width + bx,
                           chroma_width,
-                          u_blocks[chroma_block_count],
-                          ctx->sample_center);
+                          u_blocks[chroma_block_count]);
                 chroma_block_count++;
             }
         }
@@ -555,15 +674,15 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
         int pixel_y = mb_y * MB_SIZE;
 
         if (is_444) {
-            for (block_y = 0; block_y < 2; block_y++) {
-                for (block_x = 0; block_x < 2; block_x++) {
+            /* 4444: column-major block order (TL, BL, TR, BR) */
+            for (block_x = 0; block_x < 2; block_x++) {
+                for (block_y = 0; block_y < 2; block_y++) {
                     int bx = pixel_x + block_x * 8;
                     int by = pixel_y + block_y * 8;
 
                     dct_block(ctx->v_plane + by * ctx->padded_width + bx,
                               ctx->padded_width,
-                              v_blocks[v_block_count],
-                              ctx->sample_center);
+                              v_blocks[v_block_count]);
                     v_block_count++;
                 }
             }
@@ -575,8 +694,7 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
 
                 dct_block(ctx->v_plane + by * chroma_width + bx,
                           chroma_width,
-                          v_blocks[v_block_count],
-                          ctx->sample_center);
+                          v_blocks[v_block_count]);
                 v_block_count++;
             }
         }
@@ -596,11 +714,44 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
     int v_size = (put_bits_count(&v_pb) + 7) / 8;
     if ((size_t)v_size > ctx->slice_buf_capacity) return -1;
 
-    /* Now write slice header with known sizes */
-    put_bits(pb, 8, 48);  /* slice_hdr_size = 48 bits = 6 bytes */
-    put_bits(pb, 8, ctx->q_scale);  /* scale_factor */
-    put_bits(pb, 16, luma_size);    /* luma_data_size */
-    put_bits(pb, 16, u_size);       /* u_data_size */
+    /* Encode alpha for 4444 profiles */
+    int alpha_size = 0;
+    if (is_444 && ctx->a_plane) {
+        int slice_pixel_w = slice_width * MB_SIZE;
+        int pixel_x = slice_mb_x * MB_SIZE;
+        int pixel_y = mb_y * MB_SIZE;
+
+        int num_alpha_pixels = get_alpha_data(ctx->a_plane, ctx->padded_width,
+                                              pixel_x, pixel_y,
+                                              slice_pixel_w, ctx->padded_height,
+                                              ctx->alpha_pixel_buf);
+
+        PutBitContext alpha_pb;
+        init_put_bits(&alpha_pb, ctx->slice_alpha_buf, MAX_PLANE_DATA_SIZE);
+        encode_alpha_plane(&alpha_pb, ctx->alpha_pixel_buf, num_alpha_pixels, 16);
+
+        /* Byte-align alpha */
+        int alpha_bits = put_bits_count(&alpha_pb);
+        if (alpha_bits % 8) put_bits(&alpha_pb, 8 - (alpha_bits % 8), 0);
+        flush_put_bits(&alpha_pb);
+        alpha_size = (put_bits_count(&alpha_pb) + 7) / 8;
+    }
+
+    /* Write slice header with known sizes */
+    if (is_444 && ctx->a_plane) {
+        /* 8-byte header for 4444 with alpha: adds v_data_size so decoder can find alpha */
+        put_bits(pb, 8, 64);  /* slice_hdr_size = 64 bits = 8 bytes */
+        put_bits(pb, 8, ctx->q_scale);  /* scale_factor */
+        put_bits(pb, 16, luma_size);    /* luma_data_size */
+        put_bits(pb, 16, u_size);       /* u_data_size */
+        put_bits(pb, 16, v_size);       /* v_data_size */
+    } else {
+        /* 6-byte header for 422 profiles */
+        put_bits(pb, 8, 48);  /* slice_hdr_size = 48 bits = 6 bytes */
+        put_bits(pb, 8, ctx->q_scale);  /* scale_factor */
+        put_bits(pb, 16, luma_size);    /* luma_data_size */
+        put_bits(pb, 16, u_size);       /* u_data_size */
+    }
 
     /* Write plane data byte by byte */
     for (int i = 0; i < luma_size; i++) {
@@ -611,6 +762,13 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
     }
     for (int i = 0; i < v_size; i++) {
         put_bits(pb, 8, v_data[i]);
+    }
+
+    /* Write alpha data for 4444 */
+    if (is_444 && ctx->a_plane && alpha_size > 0) {
+        for (int i = 0; i < alpha_size; i++) {
+            put_bits(pb, 8, ctx->slice_alpha_buf[i]);
+        }
     }
 
     return 0;
@@ -830,26 +988,42 @@ void prores_encoder_destroy(ProResEncoderContext* ctx)
     free(ctx->slice_luma_buf);
     free(ctx->slice_u_buf);
     free(ctx->slice_v_buf);
+    free(ctx->slice_alpha_buf);
+    free(ctx->alpha_pixel_buf);
     free(ctx);
 }
 
 /* Color conversion functions */
 
-void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height, int bit_depth, ProResColorRange range)
+void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height, ProResColorRange range)
 {
     int x, y;
     int plane_size = width * height;
     int chroma_width = (width + 1) / 2;
-    int scale = 1 << (bit_depth - 8);
-    int max_val = (1 << bit_depth) - 1;
-    int y_min = 16 * scale;
-    int y_max = 235 * scale;
-    int c_min = 16 * scale;
-    int c_max = 240 * scale;
 
     uint16_t* y_plane = yuv;
     uint16_t* u_plane = yuv + plane_size;
     uint16_t* v_plane = yuv + plane_size + chroma_width * height;
+
+    /* BT.709 12-bit fixed-point coefficients (Kr=0.2126, Kg=0.7152, Kb=0.0722)
+     * Computed directly to 10-bit output from 8-bit RGB input */
+    int RY, GY, BY, y_offset;
+    int RCb, GCb, BCb, RCr, GCr, BCr, c_offset;
+    int y_min, y_max, c_min, c_max;
+
+    if (range == PRORES_RANGE_FULL) {
+        RY = 3493;  GY = 11751; BY = 1186;  y_offset = 0;
+        RCb = 1883; GCb = 6336; BCb = 8217; c_offset = 512;
+        RCr = 8217; GCr = 7465; BCr = 754;
+        y_min = 0;   y_max = 1023;
+        c_min = 0;   c_max = 1023;
+    } else {
+        RY = 2992;  GY = 10066; BY = 1016;  y_offset = 64;
+        RCb = 1649; GCb = 5548; BCb = 7193; c_offset = 512;
+        RCr = 7193; GCr = 6534; BCr = 660;
+        y_min = 64;  y_max = 940;
+        c_min = 64;  c_max = 960;
+    }
 
     for (y = 0; y < height; y++) {
         for (x = 0; x < width; x++) {
@@ -858,54 +1032,31 @@ void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
             int g = rgba[idx + 1];
             int b = rgba[idx + 2];
 
-            int y_val;
-            if (range == PRORES_RANGE_FULL) {
-                /* BT.709 full-range RGB to YCbCr */
-                y_val = ((54 * r + 183 * g + 19 * b + 128) >> 8);
-                y_val = y_val * scale;
-                if (y_val < 0) y_val = 0;
-                if (y_val > max_val) y_val = max_val;
-            } else {
-                /* BT.709 video-range RGB to YCbCr */
-                y_val = ((46 * r + 157 * g + 16 * b + 128) >> 8) + 16;
-                y_val = y_val * scale;
-                if (y_val < y_min) y_val = y_min;
-                if (y_val > y_max) y_val = y_max;
-            }
+            int y_val = ((RY * r + GY * g + BY * b + 2048) >> 12) + y_offset;
+            if (y_val < y_min) y_val = y_min;
+            if (y_val > y_max) y_val = y_max;
             y_plane[y * width + x] = y_val;
 
             /* Subsample chroma (average of 2 horizontal pixels) */
             if ((x & 1) == 0) {
-                int r2 = rgba[idx + 4 + 0];
-                int g2 = rgba[idx + 4 + 1];
-                int b2 = rgba[idx + 4 + 2];
-                if (x + 1 >= width) { r2 = r; g2 = g; b2 = b; }
+                int r2 = r, g2 = g, b2 = b;
+                if (x + 1 < width) {
+                    r2 = rgba[idx + 4 + 0];
+                    g2 = rgba[idx + 4 + 1];
+                    b2 = rgba[idx + 4 + 2];
+                }
 
                 int ravg = (r + r2) / 2;
                 int gavg = (g + g2) / 2;
                 int bavg = (b + b2) / 2;
 
-                int cb;
-                int cr;
-                if (range == PRORES_RANGE_FULL) {
-                    cb = ((-29 * ravg - 99 * gavg + 128 * bavg + 128) >> 8) + 128;
-                    cr = ((128 * ravg - 116 * gavg - 12 * bavg + 128) >> 8) + 128;
-                    cb = cb * scale;
-                    cr = cr * scale;
-                    if (cb < 0) cb = 0;
-                    if (cb > max_val) cb = max_val;
-                    if (cr < 0) cr = 0;
-                    if (cr > max_val) cr = max_val;
-                } else {
-                    cb = ((-26 * ravg - 87 * gavg + 112 * bavg + 128) >> 8) + 128;
-                    cr = ((112 * ravg - 102 * gavg - 10 * bavg + 128) >> 8) + 128;
-                    cb = cb * scale;
-                    cr = cr * scale;
-                    if (cb < c_min) cb = c_min;
-                    if (cb > c_max) cb = c_max;
-                    if (cr < c_min) cr = c_min;
-                    if (cr > c_max) cr = c_max;
-                }
+                int cb = ((-RCb * ravg - GCb * gavg + BCb * bavg + 2048) >> 12) + c_offset;
+                int cr = ((RCr * ravg - GCr * gavg - BCr * bavg + 2048) >> 12) + c_offset;
+
+                if (cb < c_min) cb = c_min;
+                if (cb > c_max) cb = c_max;
+                if (cr < c_min) cr = c_min;
+                if (cr > c_max) cr = c_max;
 
                 u_plane[y * chroma_width + x / 2] = cb;
                 v_plane[y * chroma_width + x / 2] = cr;
@@ -914,20 +1065,32 @@ void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
     }
 }
 
-void rgba_to_yuv444p10(const uint8_t* rgba, uint16_t* yuv, int width, int height, int bit_depth, ProResColorRange range)
+void rgba_to_yuv444p10(const uint8_t* rgba, uint16_t* yuv, int width, int height, ProResColorRange range)
 {
     int x, y;
     int plane_size = width * height;
-    int scale = 1 << (bit_depth - 8);
-    int max_val = (1 << bit_depth) - 1;
-    int y_min = 16 * scale;
-    int y_max = 235 * scale;
-    int c_min = 16 * scale;
-    int c_max = 240 * scale;
 
     uint16_t* y_plane = yuv;
     uint16_t* u_plane = yuv + plane_size;
     uint16_t* v_plane = yuv + plane_size * 2;
+
+    int RY, GY, BY, y_offset;
+    int RCb, GCb, BCb, RCr, GCr, BCr, c_offset;
+    int y_min, y_max, c_min, c_max;
+
+    if (range == PRORES_RANGE_FULL) {
+        RY = 3493;  GY = 11751; BY = 1186;  y_offset = 0;
+        RCb = 1883; GCb = 6336; BCb = 8217; c_offset = 512;
+        RCr = 8217; GCr = 7465; BCr = 754;
+        y_min = 0;   y_max = 1023;
+        c_min = 0;   c_max = 1023;
+    } else {
+        RY = 2992;  GY = 10066; BY = 1016;  y_offset = 64;
+        RCb = 1649; GCb = 5548; BCb = 7193; c_offset = 512;
+        RCr = 7193; GCr = 6534; BCr = 660;
+        y_min = 64;  y_max = 940;
+        c_min = 64;  c_max = 960;
+    }
 
     for (y = 0; y < height; y++) {
         for (x = 0; x < width; x++) {
@@ -936,38 +1099,16 @@ void rgba_to_yuv444p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
             int g = rgba[idx + 1];
             int b = rgba[idx + 2];
 
-            int y_val;
-            int cb;
-            int cr;
-            if (range == PRORES_RANGE_FULL) {
-                y_val = ((54 * r + 183 * g + 19 * b + 128) >> 8);
-                cb = ((-29 * r - 99 * g + 128 * b + 128) >> 8) + 128;
-                cr = ((128 * r - 116 * g - 12 * b + 128) >> 8) + 128;
-            } else {
-                y_val = ((46 * r + 157 * g + 16 * b + 128) >> 8) + 16;
-                cb = ((-26 * r - 87 * g + 112 * b + 128) >> 8) + 128;
-                cr = ((112 * r - 102 * g - 10 * b + 128) >> 8) + 128;
-            }
+            int y_val = ((RY * r + GY * g + BY * b + 2048) >> 12) + y_offset;
+            int cb = ((-RCb * r - GCb * g + BCb * b + 2048) >> 12) + c_offset;
+            int cr = ((RCr * r - GCr * g - BCr * b + 2048) >> 12) + c_offset;
 
-            y_val = y_val * scale;
-            cb = cb * scale;
-            cr = cr * scale;
-
-            if (range == PRORES_RANGE_FULL) {
-                if (y_val < 0) y_val = 0;
-                if (y_val > max_val) y_val = max_val;
-                if (cb < 0) cb = 0;
-                if (cb > max_val) cb = max_val;
-                if (cr < 0) cr = 0;
-                if (cr > max_val) cr = max_val;
-            } else {
-                if (y_val < y_min) y_val = y_min;
-                if (y_val > y_max) y_val = y_max;
-                if (cb < c_min) cb = c_min;
-                if (cb > c_max) cb = c_max;
-                if (cr < c_min) cr = c_min;
-                if (cr > c_max) cr = c_max;
-            }
+            if (y_val < y_min) y_val = y_min;
+            if (y_val > y_max) y_val = y_max;
+            if (cb < c_min) cb = c_min;
+            if (cb > c_max) cb = c_max;
+            if (cr < c_min) cr = c_min;
+            if (cr > c_max) cr = c_max;
 
             y_plane[y * width + x] = y_val;
             u_plane[y * width + x] = cb;
@@ -976,22 +1117,36 @@ void rgba_to_yuv444p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
     }
 }
 
-void rgba_to_yuva444p10(const uint8_t* rgba, uint16_t* yuva, int width, int height, int bit_depth, ProResColorRange range)
+void rgba_to_yuva444p10(const uint8_t* rgba, uint16_t* yuva, int width, int height, ProResColorRange range)
 {
     int x, y;
     int plane_size = width * height;
-    int scale = 1 << (bit_depth - 8);
-    int max_val = (1 << bit_depth) - 1;
-    int y_min = 16 * scale;
-    int y_max = 235 * scale;
-    int c_min = 16 * scale;
-    int c_max = 240 * scale;
 
     uint16_t* y_plane = yuva;
     uint16_t* u_plane = yuva + plane_size;
     uint16_t* v_plane = yuva + plane_size * 2;
     uint16_t* a_plane = yuva + plane_size * 3;
 
+    int RY, GY, BY, y_offset;
+    int RCb, GCb, BCb, RCr, GCr, BCr, c_offset;
+    int y_min, y_max, c_min, c_max;
+
+    if (range == PRORES_RANGE_FULL) {
+        RY = 3493;  GY = 11751; BY = 1186;  y_offset = 0;
+        RCb = 1883; GCb = 6336; BCb = 8217; c_offset = 512;
+        RCr = 8217; GCr = 7465; BCr = 754;
+        y_min = 0;   y_max = 1023;
+        c_min = 0;   c_max = 1023;
+    } else {
+        RY = 2992;  GY = 10066; BY = 1016;  y_offset = 64;
+        RCb = 1649; GCb = 5548; BCb = 7193; c_offset = 512;
+        RCr = 7193; GCr = 6534; BCr = 660;
+        y_min = 64;  y_max = 940;
+        c_min = 64;  c_max = 960;
+    }
+
+    /* Alpha: scale 8-bit (0-255) to 10-bit (0-1023) directly
+     * 1023/255 ≈ 4.012, use fixed-point: (a * 16430 + 2048) >> 12 */
     for (y = 0; y < height; y++) {
         for (x = 0; x < width; x++) {
             int idx = (y * width + x) * 4;
@@ -1000,40 +1155,18 @@ void rgba_to_yuva444p10(const uint8_t* rgba, uint16_t* yuva, int width, int heig
             int b = rgba[idx + 2];
             int a = rgba[idx + 3];
 
-            int y_val;
-            int cb;
-            int cr;
-            if (range == PRORES_RANGE_FULL) {
-                y_val = ((54 * r + 183 * g + 19 * b + 128) >> 8);
-                cb = ((-29 * r - 99 * g + 128 * b + 128) >> 8) + 128;
-                cr = ((128 * r - 116 * g - 12 * b + 128) >> 8) + 128;
-            } else {
-                y_val = ((46 * r + 157 * g + 16 * b + 128) >> 8) + 16;
-                cb = ((-26 * r - 87 * g + 112 * b + 128) >> 8) + 128;
-                cr = ((112 * r - 102 * g - 10 * b + 128) >> 8) + 128;
-            }
+            int y_val = ((RY * r + GY * g + BY * b + 2048) >> 12) + y_offset;
+            int cb = ((-RCb * r - GCb * g + BCb * b + 2048) >> 12) + c_offset;
+            int cr = ((RCr * r - GCr * g - BCr * b + 2048) >> 12) + c_offset;
+            int a_val = (a * 16430 + 2048) >> 12;
 
-            y_val = y_val * scale;
-            cb = cb * scale;
-            cr = cr * scale;
-            int a_val = a * scale;
-
-            if (range == PRORES_RANGE_FULL) {
-                if (y_val < 0) y_val = 0;
-                if (y_val > max_val) y_val = max_val;
-                if (cb < 0) cb = 0;
-                if (cb > max_val) cb = max_val;
-                if (cr < 0) cr = 0;
-                if (cr > max_val) cr = max_val;
-            } else {
-                if (y_val < y_min) y_val = y_min;
-                if (y_val > y_max) y_val = y_max;
-                if (cb < c_min) cb = c_min;
-                if (cb > c_max) cb = c_max;
-                if (cr < c_min) cr = c_min;
-                if (cr > c_max) cr = c_max;
-            }
-            if (a_val > max_val) a_val = max_val;
+            if (y_val < y_min) y_val = y_min;
+            if (y_val > y_max) y_val = y_max;
+            if (cb < c_min) cb = c_min;
+            if (cb > c_max) cb = c_max;
+            if (cr < c_min) cr = c_min;
+            if (cr > c_max) cr = c_max;
+            if (a_val > 1023) a_val = 1023;
 
             y_plane[y * width + x] = y_val;
             u_plane[y * width + x] = cb;
