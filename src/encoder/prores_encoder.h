@@ -117,52 +117,55 @@ void prores_encoder_destroy(ProResEncoderContext* ctx);
 
 /*
  * Convert RGBA (8-bit) to YUV422P10 (10-bit) for 4:2:2 profiles
+ * Uses 12-bit fixed-point BT.709 coefficients for direct 10-bit output
  *
  * @param rgba    Input RGBA data (width * height * 4 bytes)
  * @param yuv     Output YUV422P10 data (must be pre-allocated)
  * @param width   Frame width
  * @param height  Frame height
+ * @param range   Color range (full or limited/video)
  */
 void rgba_to_yuv422p10(
     const uint8_t* rgba,
     uint16_t* yuv,
     int width,
     int height,
-    int bit_depth,
     ProResColorRange range
 );
 
 /*
  * Convert RGBA (8-bit) to YUV444P10 (10-bit) for 4:4:4 profiles
+ * Uses 12-bit fixed-point BT.709 coefficients for direct 10-bit output
  *
  * @param rgba    Input RGBA data (width * height * 4 bytes)
  * @param yuv     Output YUV444P10 data (must be pre-allocated)
  * @param width   Frame width
  * @param height  Frame height
+ * @param range   Color range (full or limited/video)
  */
 void rgba_to_yuv444p10(
     const uint8_t* rgba,
     uint16_t* yuv,
     int width,
     int height,
-    int bit_depth,
     ProResColorRange range
 );
 
 /*
  * Convert RGBA (8-bit) to YUVA444P10 (10-bit) with alpha for 4444 profiles
+ * Uses 12-bit fixed-point BT.709 coefficients for direct 10-bit output
  *
  * @param rgba    Input RGBA data (width * height * 4 bytes)
  * @param yuva    Output YUVA444P10 data (must be pre-allocated)
  * @param width   Frame width
  * @param height  Frame height
+ * @param range   Color range (full or limited/video)
  */
 void rgba_to_yuva444p10(
     const uint8_t* rgba,
     uint16_t* yuva,
     int width,
     int height,
-    int bit_depth,
     ProResColorRange range
 );
 

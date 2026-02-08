@@ -79,11 +79,11 @@ static const uint8_t quant_matrix_hq[64] = {
     4, 4, 4, 4, 4, 4, 4, 4,
     4, 4, 4, 4, 4, 4, 4, 4,
     4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 5,
+    4, 4, 4, 4, 4, 4, 5, 5,
+    4, 4, 4, 4, 4, 5, 5, 6,
+    4, 4, 4, 4, 5, 5, 6, 7,
+    4, 4, 4, 4, 5, 6, 7, 7,
 };
 
 /* ProRes progressive scan order (FFmpeg compatible) */
@@ -424,8 +424,8 @@ static void encode_ac_coeffs_all(PutBitContext* pb, int16_t blocks[][64], int nu
     int16_t* flat = &blocks[0][0];
 
     for (int i = 1; i < 64; i++) {
-        /* qmat is in scan order, so use qmat[i] for scan position i */
-        int q = qmat[i] * q_scale;
+        /* qmat is in raster order; scan[i] gives the raster position for scan position i */
+        int q = qmat[scan[i]] * q_scale;
         if (q < 1) q = 1;
         int half_q = q >> 1;
         for (int idx = scan[i]; idx < max_coeffs; idx += 64) {
@@ -845,17 +845,35 @@ void prores_encoder_destroy(ProResEncoderContext* ctx)
 
 /* Color conversion functions */
 
-void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height, int bit_depth, ProResColorRange range)
+void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height, ProResColorRange range)
 {
     int x, y;
     int plane_size = width * height;
     int chroma_width = (width + 1) / 2;
-    int scale = 1 << (bit_depth - 8);
-    int max_val = (1 << bit_depth) - 1;
 
     uint16_t* y_plane = yuv;
     uint16_t* u_plane = yuv + plane_size;
     uint16_t* v_plane = yuv + plane_size + chroma_width * height;
+
+    /* BT.709 12-bit fixed-point coefficients (Kr=0.2126, Kg=0.7152, Kb=0.0722)
+     * Computed directly to 10-bit output from 8-bit RGB input */
+    int RY, GY, BY, y_offset;
+    int RCb, GCb, BCb, RCr, GCr, BCr, c_offset;
+    int y_min, y_max, c_min, c_max;
+
+    if (range == PRORES_RANGE_FULL) {
+        RY = 3493;  GY = 11751; BY = 1186;  y_offset = 0;
+        RCb = 1883; GCb = 6336; BCb = 8217; c_offset = 512;
+        RCr = 8217; GCr = 7465; BCr = 754;
+        y_min = 0;   y_max = 1023;
+        c_min = 0;   c_max = 1023;
+    } else {
+        RY = 2992;  GY = 10066; BY = 1016;  y_offset = 64;
+        RCb = 1649; GCb = 5548; BCb = 7193; c_offset = 512;
+        RCr = 7193; GCr = 6534; BCr = 660;
+        y_min = 64;  y_max = 940;
+        c_min = 64;  c_max = 960;
+    }
 
     for (y = 0; y < height; y++) {
         for (x = 0; x < width; x++) {
@@ -864,29 +882,14 @@ void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
             int g = rgba[idx + 1];
             int b = rgba[idx + 2];
 
-            int y_val;
-            if (range == PRORES_RANGE_FULL) {
-                /* BT.709 full-range RGB to YCbCr */
-                int y8 = ((54 * r + 183 * g + 19 * b + 128) >> 8);
-                if (y8 < 0) y8 = 0;
-                if (y8 > 255) y8 = 255;
-                y_val = y8 * scale;
-            } else {
-                /* BT.709 video-range RGB to YCbCr */
-                int y8 = ((46 * r + 157 * g + 16 * b + 128) >> 8) + 16;
-                if (y8 < 16) y8 = 16;
-                if (y8 > 235) y8 = 235;
-                y_val = y8 * scale;
-            }
-            if (y_val < 0) y_val = 0;
-            if (y_val > max_val) y_val = max_val;
+            int y_val = ((RY * r + GY * g + BY * b + 2048) >> 12) + y_offset;
+            if (y_val < y_min) y_val = y_min;
+            if (y_val > y_max) y_val = y_max;
             y_plane[y * width + x] = y_val;
 
             /* Subsample chroma (average of 2 horizontal pixels) */
             if ((x & 1) == 0) {
-                int r2 = r;
-                int g2 = g;
-                int b2 = b;
+                int r2 = r, g2 = g, b2 = b;
                 if (x + 1 < width) {
                     r2 = rgba[idx + 4 + 0];
                     g2 = rgba[idx + 4 + 1];
@@ -897,32 +900,13 @@ void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
                 int gavg = (g + g2) / 2;
                 int bavg = (b + b2) / 2;
 
-                int cb;
-                int cr;
-                if (range == PRORES_RANGE_FULL) {
-                    int cb8 = ((-29 * ravg - 99 * gavg + 128 * bavg + 128) >> 8) + 128;
-                    int cr8 = ((128 * ravg - 116 * gavg - 12 * bavg + 128) >> 8) + 128;
-                    if (cb8 < 0) cb8 = 0;
-                    if (cb8 > 255) cb8 = 255;
-                    if (cr8 < 0) cr8 = 0;
-                    if (cr8 > 255) cr8 = 255;
-                    cb = cb8 * scale;
-                    cr = cr8 * scale;
-                } else {
-                    int cb8 = ((-26 * ravg - 87 * gavg + 112 * bavg + 128) >> 8) + 128;
-                    int cr8 = ((112 * ravg - 102 * gavg - 10 * bavg + 128) >> 8) + 128;
-                    if (cb8 < 16) cb8 = 16;
-                    if (cb8 > 240) cb8 = 240;
-                    if (cr8 < 16) cr8 = 16;
-                    if (cr8 > 240) cr8 = 240;
-                    cb = cb8 * scale;
-                    cr = cr8 * scale;
-                }
+                int cb = ((-RCb * ravg - GCb * gavg + BCb * bavg + 2048) >> 12) + c_offset;
+                int cr = ((RCr * ravg - GCr * gavg - BCr * bavg + 2048) >> 12) + c_offset;
 
-                if (cb < 0) cb = 0;
-                if (cb > max_val) cb = max_val;
-                if (cr < 0) cr = 0;
-                if (cr > max_val) cr = max_val;
+                if (cb < c_min) cb = c_min;
+                if (cb > c_max) cb = c_max;
+                if (cr < c_min) cr = c_min;
+                if (cr > c_max) cr = c_max;
 
                 u_plane[y * chroma_width + x / 2] = cb;
                 v_plane[y * chroma_width + x / 2] = cr;
@@ -931,16 +915,32 @@ void rgba_to_yuv422p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
     }
 }
 
-void rgba_to_yuv444p10(const uint8_t* rgba, uint16_t* yuv, int width, int height, int bit_depth, ProResColorRange range)
+void rgba_to_yuv444p10(const uint8_t* rgba, uint16_t* yuv, int width, int height, ProResColorRange range)
 {
     int x, y;
     int plane_size = width * height;
-    int scale = 1 << (bit_depth - 8);
-    int max_val = (1 << bit_depth) - 1;
 
     uint16_t* y_plane = yuv;
     uint16_t* u_plane = yuv + plane_size;
     uint16_t* v_plane = yuv + plane_size * 2;
+
+    int RY, GY, BY, y_offset;
+    int RCb, GCb, BCb, RCr, GCr, BCr, c_offset;
+    int y_min, y_max, c_min, c_max;
+
+    if (range == PRORES_RANGE_FULL) {
+        RY = 3493;  GY = 11751; BY = 1186;  y_offset = 0;
+        RCb = 1883; GCb = 6336; BCb = 8217; c_offset = 512;
+        RCr = 8217; GCr = 7465; BCr = 754;
+        y_min = 0;   y_max = 1023;
+        c_min = 0;   c_max = 1023;
+    } else {
+        RY = 2992;  GY = 10066; BY = 1016;  y_offset = 64;
+        RCb = 1649; GCb = 5548; BCb = 7193; c_offset = 512;
+        RCr = 7193; GCr = 6534; BCr = 660;
+        y_min = 64;  y_max = 940;
+        c_min = 64;  c_max = 960;
+    }
 
     for (y = 0; y < height; y++) {
         for (x = 0; x < width; x++) {
@@ -949,42 +949,16 @@ void rgba_to_yuv444p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
             int g = rgba[idx + 1];
             int b = rgba[idx + 2];
 
-            int y_val;
-            int cb;
-            int cr;
-            if (range == PRORES_RANGE_FULL) {
-                int y8 = ((54 * r + 183 * g + 19 * b + 128) >> 8);
-                int cb8 = ((-29 * r - 99 * g + 128 * b + 128) >> 8) + 128;
-                int cr8 = ((128 * r - 116 * g - 12 * b + 128) >> 8) + 128;
-                if (y8 < 0) y8 = 0;
-                if (y8 > 255) y8 = 255;
-                if (cb8 < 0) cb8 = 0;
-                if (cb8 > 255) cb8 = 255;
-                if (cr8 < 0) cr8 = 0;
-                if (cr8 > 255) cr8 = 255;
-                y_val = y8 * scale;
-                cb = cb8 * scale;
-                cr = cr8 * scale;
-            } else {
-                int y8 = ((46 * r + 157 * g + 16 * b + 128) >> 8) + 16;
-                int cb8 = ((-26 * r - 87 * g + 112 * b + 128) >> 8) + 128;
-                int cr8 = ((112 * r - 102 * g - 10 * b + 128) >> 8) + 128;
-                if (y8 < 16) y8 = 16;
-                if (y8 > 235) y8 = 235;
-                if (cb8 < 16) cb8 = 16;
-                if (cb8 > 240) cb8 = 240;
-                if (cr8 < 16) cr8 = 16;
-                if (cr8 > 240) cr8 = 240;
-                y_val = y8 * scale;
-                cb = cb8 * scale;
-                cr = cr8 * scale;
-            }
-            if (y_val < 0) y_val = 0;
-            if (y_val > max_val) y_val = max_val;
-            if (cb < 0) cb = 0;
-            if (cb > max_val) cb = max_val;
-            if (cr < 0) cr = 0;
-            if (cr > max_val) cr = max_val;
+            int y_val = ((RY * r + GY * g + BY * b + 2048) >> 12) + y_offset;
+            int cb = ((-RCb * r - GCb * g + BCb * b + 2048) >> 12) + c_offset;
+            int cr = ((RCr * r - GCr * g - BCr * b + 2048) >> 12) + c_offset;
+
+            if (y_val < y_min) y_val = y_min;
+            if (y_val > y_max) y_val = y_max;
+            if (cb < c_min) cb = c_min;
+            if (cb > c_max) cb = c_max;
+            if (cr < c_min) cr = c_min;
+            if (cr > c_max) cr = c_max;
 
             y_plane[y * width + x] = y_val;
             u_plane[y * width + x] = cb;
@@ -993,18 +967,36 @@ void rgba_to_yuv444p10(const uint8_t* rgba, uint16_t* yuv, int width, int height
     }
 }
 
-void rgba_to_yuva444p10(const uint8_t* rgba, uint16_t* yuva, int width, int height, int bit_depth, ProResColorRange range)
+void rgba_to_yuva444p10(const uint8_t* rgba, uint16_t* yuva, int width, int height, ProResColorRange range)
 {
     int x, y;
     int plane_size = width * height;
-    int scale = 1 << (bit_depth - 8);
-    int max_val = (1 << bit_depth) - 1;
 
     uint16_t* y_plane = yuva;
     uint16_t* u_plane = yuva + plane_size;
     uint16_t* v_plane = yuva + plane_size * 2;
     uint16_t* a_plane = yuva + plane_size * 3;
 
+    int RY, GY, BY, y_offset;
+    int RCb, GCb, BCb, RCr, GCr, BCr, c_offset;
+    int y_min, y_max, c_min, c_max;
+
+    if (range == PRORES_RANGE_FULL) {
+        RY = 3493;  GY = 11751; BY = 1186;  y_offset = 0;
+        RCb = 1883; GCb = 6336; BCb = 8217; c_offset = 512;
+        RCr = 8217; GCr = 7465; BCr = 754;
+        y_min = 0;   y_max = 1023;
+        c_min = 0;   c_max = 1023;
+    } else {
+        RY = 2992;  GY = 10066; BY = 1016;  y_offset = 64;
+        RCb = 1649; GCb = 5548; BCb = 7193; c_offset = 512;
+        RCr = 7193; GCr = 6534; BCr = 660;
+        y_min = 64;  y_max = 940;
+        c_min = 64;  c_max = 960;
+    }
+
+    /* Alpha: scale 8-bit (0-255) to 10-bit (0-1023) directly
+     * 1023/255 ≈ 4.012, use fixed-point: (a * 16430 + 2048) >> 12 */
     for (y = 0; y < height; y++) {
         for (x = 0; x < width; x++) {
             int idx = (y * width + x) * 4;
@@ -1013,44 +1005,18 @@ void rgba_to_yuva444p10(const uint8_t* rgba, uint16_t* yuva, int width, int heig
             int b = rgba[idx + 2];
             int a = rgba[idx + 3];
 
-            int y_val;
-            int cb;
-            int cr;
-            if (range == PRORES_RANGE_FULL) {
-                int y8 = ((54 * r + 183 * g + 19 * b + 128) >> 8);
-                int cb8 = ((-29 * r - 99 * g + 128 * b + 128) >> 8) + 128;
-                int cr8 = ((128 * r - 116 * g - 12 * b + 128) >> 8) + 128;
-                if (y8 < 0) y8 = 0;
-                if (y8 > 255) y8 = 255;
-                if (cb8 < 0) cb8 = 0;
-                if (cb8 > 255) cb8 = 255;
-                if (cr8 < 0) cr8 = 0;
-                if (cr8 > 255) cr8 = 255;
-                y_val = y8 * scale;
-                cb = cb8 * scale;
-                cr = cr8 * scale;
-            } else {
-                int y8 = ((46 * r + 157 * g + 16 * b + 128) >> 8) + 16;
-                int cb8 = ((-26 * r - 87 * g + 112 * b + 128) >> 8) + 128;
-                int cr8 = ((112 * r - 102 * g - 10 * b + 128) >> 8) + 128;
-                if (y8 < 16) y8 = 16;
-                if (y8 > 235) y8 = 235;
-                if (cb8 < 16) cb8 = 16;
-                if (cb8 > 240) cb8 = 240;
-                if (cr8 < 16) cr8 = 16;
-                if (cr8 > 240) cr8 = 240;
-                y_val = y8 * scale;
-                cb = cb8 * scale;
-                cr = cr8 * scale;
-            }
-            int a_val = a * scale;
-            if (y_val < 0) y_val = 0;
-            if (y_val > max_val) y_val = max_val;
-            if (cb < 0) cb = 0;
-            if (cb > max_val) cb = max_val;
-            if (cr < 0) cr = 0;
-            if (cr > max_val) cr = max_val;
-            if (a_val > max_val) a_val = max_val;
+            int y_val = ((RY * r + GY * g + BY * b + 2048) >> 12) + y_offset;
+            int cb = ((-RCb * r - GCb * g + BCb * b + 2048) >> 12) + c_offset;
+            int cr = ((RCr * r - GCr * g - BCr * b + 2048) >> 12) + c_offset;
+            int a_val = (a * 16430 + 2048) >> 12;
+
+            if (y_val < y_min) y_val = y_min;
+            if (y_val > y_max) y_val = y_max;
+            if (cb < c_min) cb = c_min;
+            if (cb > c_max) cb = c_max;
+            if (cr < c_min) cr = c_min;
+            if (cr > c_max) cr = c_max;
+            if (a_val > 1023) a_val = 1023;
 
             y_plane[y * width + x] = y_val;
             u_plane[y * width + x] = cb;

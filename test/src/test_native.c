@@ -111,7 +111,7 @@ int main(int argc, char* argv[])
         generate_test_frame(rgba_buffer, WIDTH, HEIGHT, frame, NUM_FRAMES);
 
         /* Convert to YUV */
-        rgba_to_yuv422p10(rgba_buffer, yuv_buffer, WIDTH, HEIGHT, 10, PRORES_RANGE_FULL);
+        rgba_to_yuv422p10(rgba_buffer, yuv_buffer, WIDTH, HEIGHT, PRORES_RANGE_FULL);
 
         /* Encode frame */
         uint8_t* frame_data = NULL;
