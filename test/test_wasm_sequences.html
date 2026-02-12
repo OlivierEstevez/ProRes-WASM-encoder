@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ProRes WASM - PNG Sequence Test</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap');
+
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: #0a0a0a;
+      color: #f2f2f2;
+    }
+    h1 {
+      font-size: 20px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin: 0 0 4px 0;
+    }
+    .subtitle {
+      color: #a6a6a6;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin: 0 0 20px 0;
+    }
+    .panel {
+      background: #0f0f0f;
+      border: 1px solid #1f1f1f;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .panel h2 {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #9a9a9a;
+      margin: 0 0 12px 0;
+    }
+    .controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    label {
+      font-size: 11px;
+      color: #9a9a9a;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    select, input[type="number"] {
+      padding: 6px 10px;
+      border: 1px solid #2a2a2a;
+      border-radius: 4px;
+      background: #0a0a0a;
+      color: #f2f2f2;
+      font-size: 12px;
+    }
+    button {
+      padding: 8px 16px;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      background: #0f0f0f;
+      color: #f2f2f2;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: #f2f2f2; color: #0a0a0a; border-color: #f2f2f2; }
+    .btn-primary:hover:not(:disabled) { background: #dcdcdc; }
+    .progress-bar-container {
+      height: 3px;
+      background: #1a1a1a;
+      border-radius: 2px;
+      margin-top: 8px;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      background: #f2f2f2;
+      width: 0%;
+      transition: width 0.15s;
+    }
+    .log {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      max-height: 200px;
+      overflow-y: auto;
+      padding: 8px;
+      background: #050505;
+      border: 1px solid #1a1a1a;
+      border-radius: 4px;
+    }
+    .log-entry { margin-bottom: 3px; color: #b3b3b3; }
+    .log-entry.info { color: #e0e0e0; }
+    .log-entry.success { color: #8fdf8f; }
+    .log-entry.error { color: #df8f8f; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    th, td {
+      padding: 6px 10px;
+      text-align: left;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      color: #9a9a9a;
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+    }
+    td.size { font-family: 'Space Mono', monospace; }
+    td.time { font-family: 'Space Mono', monospace; }
+    .status-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .status-pending { background: #1a1a1a; color: #666; }
+    .status-encoding { background: #1a1a2a; color: #88f; }
+    .status-done { background: #1a2a1a; color: #8f8; }
+    .status-error { background: #2a1a1a; color: #f88; }
+    .preview-canvas {
+      max-width: 320px;
+      max-height: 180px;
+      border: 1px solid #222;
+      border-radius: 4px;
+      background: #000;
+    }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <h1>ProRes WASM</h1>
+  <p class="subtitle">PNG Sequence Encoder Test</p>
+
+  <div class="panel">
+    <h2>1. Select PNG Folder</h2>
+    <div class="controls">
+      <input type="file" id="folderInput" webkitdirectory multiple accept="image/png" style="display:none">
+      <button id="selectFolderBtn" class="btn-primary">Select PNG Folder</button>
+      <span id="folderInfo" style="color:#666; font-size:12px;">No folder selected</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>2. Settings</h2>
+    <div class="controls">
+      <div>
+        <label>FPS</label><br>
+        <select id="fps">
+          <option value="24000/1001">23.976</option>
+          <option value="24/1">24</option>
+          <option value="25/1">25</option>
+          <option value="30000/1001">29.97</option>
+          <option value="30/1" selected>30</option>
+          <option value="60/1">60</option>
+        </select>
+      </div>
+      <div>
+        <label>Color Range</label><br>
+        <select id="range">
+          <option value="full" selected>Full</option>
+          <option value="limited">Limited</option>
+        </select>
+      </div>
+      <div>
+        <label>Detected</label><br>
+        <span id="detectedInfo" style="font-size:12px; color:#666;">-</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>3. Encode</h2>
+    <div class="controls">
+      <button id="encodeBtn" class="btn-primary" disabled>Encode All Profiles</button>
+      <button id="stopBtn" disabled>Stop</button>
+      <button id="downloadZipBtn" disabled>Download All MOVs (ZIP)</button>
+      <button id="downloadJsonBtn" disabled>Download Results JSON</button>
+    </div>
+    <div class="progress-bar-container" style="margin-top:12px;">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+    <div id="statusText" style="font-size:11px; color:#666; margin-top:4px;">Ready</div>
+  </div>
+
+  <div class="panel">
+    <h2>Results</h2>
+    <table id="resultsTable">
+      <thead>
+        <tr>
+          <th>Profile</th>
+          <th>Status</th>
+          <th>Size</th>
+          <th>Encode Time</th>
+        </tr>
+      </thead>
+      <tbody id="resultsBody"></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>Preview</h2>
+    <canvas id="previewCanvas" class="preview-canvas" width="320" height="180"></canvas>
+  </div>
+
+  <div class="panel">
+    <h2>Log</h2>
+    <div class="log" id="log"></div>
+  </div>
+
+  <script type="module">
+    let createProResEncoder = null;
+    let moduleLoadError = null;
+
+    // Load encoder module
+    (async () => {
+      try {
+        const moduleUrl = new URL('../dist/prores-encoder.esm.js', import.meta.url);
+        const mod = await import(moduleUrl.href);
+        createProResEncoder = mod.default;
+        log('Encoder module loaded', 'info');
+      } catch (err) {
+        moduleLoadError = err;
+        log('Failed to load encoder module. Run npm run build first, then serve from repo root.', 'error');
+      }
+    })();
+
+    // State
+    let pngFiles = [];
+    let imgWidth = 0;
+    let imgHeight = 0;
+    let hasAlpha = false;
+    let isEncoding = false;
+    let results = {};  // { profileName: { data: Uint8Array, size: number, time: number } }
+
+    // Profile definitions
+    const PROFILES_422 = [
+      { value: 0, name: 'Proxy',    filename: 'proxy.mov' },
+      { value: 1, name: 'LT',       filename: 'lt.mov' },
+      { value: 2, name: 'Standard', filename: 'standard.mov' },
+      { value: 3, name: 'HQ',       filename: 'hq.mov' },
+      { value: 4, name: '4444',     filename: '4444.mov' },
+      { value: 5, name: '4444XQ',   filename: '4444xq.mov' },
+    ];
+    const PROFILES_ALPHA = [
+      { value: 4, name: '4444',     filename: '4444.mov' },
+      { value: 5, name: '4444XQ',   filename: '4444xq.mov' },
+    ];
+
+    // DOM
+    const logEl = document.getElementById('log');
+    const folderInput = document.getElementById('folderInput');
+    const selectFolderBtn = document.getElementById('selectFolderBtn');
+    const folderInfo = document.getElementById('folderInfo');
+    const detectedInfo = document.getElementById('detectedInfo');
+    const encodeBtn = document.getElementById('encodeBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const downloadZipBtn = document.getElementById('downloadZipBtn');
+    const downloadJsonBtn = document.getElementById('downloadJsonBtn');
+    const progressBar = document.getElementById('progressBar');
+    const statusText = document.getElementById('statusText');
+    const resultsBody = document.getElementById('resultsBody');
+    const previewCanvas = document.getElementById('previewCanvas');
+    const previewCtx = previewCanvas.getContext('2d');
+
+    function log(msg, type = '') {
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setProgress(pct) {
+      progressBar.style.width = `${pct}%`;
+    }
+
+    function formatSize(bytes) {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / 1048576).toFixed(2)} MB`;
+    }
+
+    function loadImageFromFile(file) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+        img.onerror = (e) => { URL.revokeObjectURL(url); reject(e); };
+        img.src = url;
+      });
+    }
+
+    // Detect alpha by drawing first PNG and checking pixel data
+    async function detectAlpha(file) {
+      const img = await loadImageFromFile(file);
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const data = ctx.getImageData(0, 0, img.width, img.height).data;
+      for (let i = 3; i < data.length; i += 4) {
+        if (data[i] < 255) return true;
+      }
+      return false;
+    }
+
+    // Folder selection
+    selectFolderBtn.addEventListener('click', () => folderInput.click());
+
+    folderInput.addEventListener('change', async (e) => {
+      const files = Array.from(e.target.files)
+        .filter(f => f.name.toLowerCase().endsWith('.png'))
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+      if (!files.length) {
+        log('No PNG files found in folder', 'error');
+        return;
+      }
+
+      pngFiles = files;
+      log(`Found ${files.length} PNG files`, 'info');
+
+      // Detect resolution from first image
+      const firstImg = await loadImageFromFile(files[0]);
+      imgWidth = firstImg.width;
+      imgHeight = firstImg.height;
+
+      // Detect alpha
+      hasAlpha = await detectAlpha(files[0]);
+
+      folderInfo.textContent = `${files.length} PNGs selected`;
+      detectedInfo.textContent = `${imgWidth}x${imgHeight}, ${hasAlpha ? 'RGBA (alpha)' : 'RGB (no alpha)'}`;
+
+      log(`Resolution: ${imgWidth}x${imgHeight}`, 'info');
+      log(`Alpha: ${hasAlpha ? 'yes' : 'no'}`, 'info');
+
+      // Show preview
+      previewCanvas.width = Math.min(imgWidth, 640);
+      previewCanvas.height = Math.min(imgHeight, 360);
+      previewCtx.drawImage(firstImg, 0, 0, previewCanvas.width, previewCanvas.height);
+
+      encodeBtn.disabled = false;
+      results = {};
+      downloadZipBtn.disabled = true;
+      downloadJsonBtn.disabled = true;
+      updateResultsTable([]);
+    });
+
+    function updateResultsTable(profiles) {
+      resultsBody.innerHTML = '';
+      for (const p of profiles) {
+        const tr = document.createElement('tr');
+        const statusClass = p.status === 'done' ? 'status-done'
+          : p.status === 'encoding' ? 'status-encoding'
+          : p.status === 'error' ? 'status-error'
+          : 'status-pending';
+
+        tr.innerHTML = `
+          <td>${p.name}</td>
+          <td><span class="status-badge ${statusClass}">${p.status}</span></td>
+          <td class="size">${p.size ? formatSize(p.size) : '-'}</td>
+          <td class="time">${p.time ? `${p.time.toFixed(0)} ms` : '-'}</td>
+        `;
+        resultsBody.appendChild(tr);
+      }
+    }
+
+    // Encode all profiles
+    encodeBtn.addEventListener('click', async () => {
+      if (!createProResEncoder) {
+        log(moduleLoadError ? moduleLoadError.message : 'Encoder not loaded', 'error');
+        return;
+      }
+      if (!pngFiles.length) {
+        log('No PNG files loaded', 'error');
+        return;
+      }
+
+      const profiles = hasAlpha ? [...PROFILES_ALPHA] : [...PROFILES_422];
+      const [fpsNum, fpsDen] = document.getElementById('fps').value.split('/').map(Number);
+      const range = document.getElementById('range').value;
+
+      isEncoding = true;
+      encodeBtn.disabled = true;
+      stopBtn.disabled = false;
+      downloadZipBtn.disabled = true;
+      downloadJsonBtn.disabled = true;
+      results = {};
+
+      // Init results table
+      const tableData = profiles.map(p => ({ ...p, status: 'pending', size: null, time: null }));
+      updateResultsTable(tableData);
+
+      const offscreenCanvas = document.createElement('canvas');
+      offscreenCanvas.width = imgWidth;
+      offscreenCanvas.height = imgHeight;
+      const offCtx = offscreenCanvas.getContext('2d');
+
+      for (let pi = 0; pi < profiles.length && isEncoding; pi++) {
+        const prof = profiles[pi];
+        tableData[pi].status = 'encoding';
+        updateResultsTable(tableData);
+
+        log(`Encoding ${prof.name} profile...`, 'info');
+        statusText.textContent = `Encoding ${prof.name} (${pi + 1}/${profiles.length})...`;
+
+        try {
+          const encoder = await createProResEncoder();
+          encoder.initialize({
+            width: imgWidth,
+            height: imgHeight,
+            frameRateNum: fpsNum,
+            frameRateDen: fpsDen,
+            profile: prof.value,
+            quality: 100,
+            range
+          });
+
+          const t0 = performance.now();
+
+          for (let i = 0; i < pngFiles.length && isEncoding; i++) {
+            const img = await loadImageFromFile(pngFiles[i]);
+            offCtx.drawImage(img, 0, 0);
+            const imageData = offCtx.getImageData(0, 0, imgWidth, imgHeight);
+            encoder.addFrameRgba(imageData.data);
+
+            // Progress
+            const overallPct = ((pi + (i + 1) / pngFiles.length) / profiles.length) * 100;
+            setProgress(overallPct);
+
+            // Preview every 10 frames
+            if (i % 10 === 0) {
+              previewCtx.drawImage(img, 0, 0, previewCanvas.width, previewCanvas.height);
+              await new Promise(r => setTimeout(r, 0));
+            }
+          }
+
+          if (!isEncoding) {
+            encoder.destroy();
+            break;
+          }
+
+          const movData = encoder.finalize();
+          const elapsed = performance.now() - t0;
+          encoder.destroy();
+
+          results[prof.filename] = {
+            data: movData,
+            size: movData.length,
+            time: elapsed,
+            profile: prof.name
+          };
+
+          tableData[pi].status = 'done';
+          tableData[pi].size = movData.length;
+          tableData[pi].time = elapsed;
+          updateResultsTable(tableData);
+
+          log(`${prof.name}: ${formatSize(movData.length)}, ${elapsed.toFixed(0)} ms`, 'success');
+
+        } catch (err) {
+          tableData[pi].status = 'error';
+          updateResultsTable(tableData);
+          log(`${prof.name} error: ${err.message}`, 'error');
+        }
+      }
+
+      isEncoding = false;
+      encodeBtn.disabled = false;
+      stopBtn.disabled = true;
+
+      if (Object.keys(results).length > 0) {
+        downloadZipBtn.disabled = false;
+        downloadJsonBtn.disabled = false;
+        statusText.textContent = 'Encoding complete. Ready to download.';
+        setProgress(100);
+        log('All profiles encoded.', 'success');
+      } else {
+        statusText.textContent = 'Encoding cancelled or failed.';
+      }
+    });
+
+    stopBtn.addEventListener('click', () => {
+      isEncoding = false;
+      log('Stopping...', 'info');
+    });
+
+    // ZIP builder (reused from index.html)
+    const textEnc = new TextEncoder();
+    const crcTable = (() => {
+      const t = new Uint32Array(256);
+      for (let i = 0; i < 256; i++) {
+        let c = i;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        t[i] = c >>> 0;
+      }
+      return t;
+    })();
+
+    function crc32(data) {
+      let crc = 0xFFFFFFFF;
+      for (let i = 0; i < data.length; i++) crc = crcTable[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8);
+      return (crc ^ 0xFFFFFFFF) >>> 0;
+    }
+
+    function buildZip(files) {
+      const parts = [];
+      const centralParts = [];
+      let offset = 0;
+
+      for (const file of files) {
+        const nameBytes = textEnc.encode(file.name);
+        const data = file.data;
+        const crc = crc32(data);
+
+        const lh = new Uint8Array(30 + nameBytes.length);
+        const lv = new DataView(lh.buffer);
+        lv.setUint32(0, 0x04034b50, true);
+        lv.setUint16(4, 20, true);
+        lv.setUint32(14, crc, true);
+        lv.setUint32(18, data.length, true);
+        lv.setUint32(22, data.length, true);
+        lv.setUint16(26, nameBytes.length, true);
+        lh.set(nameBytes, 30);
+        parts.push(lh, data);
+
+        const ch = new Uint8Array(46 + nameBytes.length);
+        const cv = new DataView(ch.buffer);
+        cv.setUint32(0, 0x02014b50, true);
+        cv.setUint16(4, 20, true);
+        cv.setUint16(6, 20, true);
+        cv.setUint32(16, crc, true);
+        cv.setUint32(20, data.length, true);
+        cv.setUint32(24, data.length, true);
+        cv.setUint16(28, nameBytes.length, true);
+        cv.setUint32(42, offset, true);
+        ch.set(nameBytes, 46);
+        centralParts.push(ch);
+        offset += lh.length + data.length;
+      }
+
+      const centralOffset = offset;
+      let centralSize = 0;
+      for (const p of centralParts) centralSize += p.length;
+      parts.push(...centralParts);
+
+      const end = new Uint8Array(22);
+      const ev = new DataView(end.buffer);
+      ev.setUint32(0, 0x06054b50, true);
+      ev.setUint16(8, files.length, true);
+      ev.setUint16(10, files.length, true);
+      ev.setUint32(12, centralSize, true);
+      ev.setUint32(16, centralOffset, true);
+      parts.push(end);
+
+      let total = 0;
+      for (const p of parts) total += p.length;
+      const out = new Uint8Array(total);
+      let cur = 0;
+      for (const p of parts) { out.set(p, cur); cur += p.length; }
+      return out;
+    }
+
+    function downloadBlob(data, filename, mime) {
+      const blob = new Blob([data], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    downloadZipBtn.addEventListener('click', () => {
+      const files = Object.entries(results).map(([name, r]) => ({
+        name,
+        data: r.data instanceof Uint8Array ? r.data : new Uint8Array(r.data)
+      }));
+      const zip = buildZip(files);
+      downloadBlob(zip, 'wasm_results.zip', 'application/zip');
+      log('ZIP download started', 'success');
+    });
+
+    downloadJsonBtn.addEventListener('click', () => {
+      const json = {
+        encoder: 'wasm',
+        resolution: `${imgWidth}x${imgHeight}`,
+        has_alpha: hasAlpha,
+        fps: document.getElementById('fps').value,
+        range: document.getElementById('range').value,
+        num_frames: pngFiles.length,
+        profiles: {}
+      };
+      for (const [filename, r] of Object.entries(results)) {
+        json.profiles[r.profile] = {
+          filename,
+          size_bytes: r.size,
+          encode_ms: Math.round(r.time)
+        };
+      }
+      const str = JSON.stringify(json, null, 2);
+      downloadBlob(new TextEncoder().encode(str), 'wasm_results.json', 'application/json');
+      log('JSON download started', 'success');
+    });
+
+    log('PNG Sequence Test page loaded. Select a folder to begin.', 'info');
+  </script>
+</body>
+</html>
