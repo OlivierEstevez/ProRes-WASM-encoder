@@ -148,14 +148,18 @@ int prores_wasm_add_frame_rgba(void* ctx_ptr, const uint8_t* rgba_ptr)
 
     int ret = prores_encoder_encode_frame(ctx->encoder, ctx->yuv_buffer, &frame_data, &frame_size);
     if (ret < 0) {
-        return ret;
+        return -2;  /* encode failed */
     }
 
     /* Write to muxer */
     ret = mov_muxer_write_frame(ctx->muxer, frame_data, frame_size);
     free(frame_data);
 
-    return ret;
+    if (ret < 0) {
+        return -3;  /* mux failed (likely memory allocation / realloc) */
+    }
+
+    return 0;
 }
 
 /*
