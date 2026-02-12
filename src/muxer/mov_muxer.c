@@ -83,13 +83,16 @@ struct MovMuxerContext {
     uint64_t duration;
 };
 
-/* Dynamic buffer writing */
+/* Dynamic buffer writing.
+ * Grows by 25% + needed instead of doubling to reduce peak memory usage.
+ * This matters in WASM where realloc needs old_size + new_size temporarily. */
 static int ensure_mdat_capacity(MovMuxerContext* ctx, size_t needed)
 {
     if (ctx->mdat_size + needed > ctx->mdat_capacity) {
-        size_t new_capacity = ctx->mdat_capacity * 2;
-        if (new_capacity < ctx->mdat_size + needed) {
-            new_capacity = ctx->mdat_size + needed + 1024 * 1024;
+        size_t required = ctx->mdat_size + needed;
+        size_t new_capacity = ctx->mdat_capacity + ctx->mdat_capacity / 4;
+        if (new_capacity < required) {
+            new_capacity = required + 1024 * 1024;
         }
         uint8_t* new_buf = (uint8_t*)realloc(ctx->mdat_buf, new_capacity);
         if (!new_buf) return -1;
@@ -122,7 +125,7 @@ MovMuxerContext* mov_muxer_create(const MovMuxerConfig* config)
     }
 
     /* Initial mdat buffer (will grow as needed) */
-    ctx->mdat_capacity = 1024 * 1024;  /* 1MB initial */
+    ctx->mdat_capacity = 8 * 1024 * 1024;  /* 8MB initial */
     ctx->mdat_buf = (uint8_t*)malloc(ctx->mdat_capacity);
     if (!ctx->mdat_buf) {
         free(ctx->samples);
