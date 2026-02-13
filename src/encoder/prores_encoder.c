@@ -286,8 +286,9 @@ static int write_frame_header(ProResEncoderContext* ctx, uint8_t* buf)
     *p++ = (hdr_size >> 8) & 0xFF;
     *p++ = hdr_size & 0xFF;
 
-    /* Reserved/version (2 bytes) */
-    *p++ = 0; *p++ = 0;
+    /* Version (2 bytes): FFmpeg sets byte 3 to 1 for 4444 profiles */
+    *p++ = 0;
+    *p++ = is_444 ? 1 : 0;
 
     /* Encoder identifier 'wasm' (4 bytes) */
     *p++ = 'w'; *p++ = 'a'; *p++ = 's'; *p++ = 'm';
