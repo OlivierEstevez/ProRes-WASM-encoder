@@ -33,7 +33,7 @@ encode_profile() {
     local START_TIME
     START_TIME=$(python3 -c "import time; print(time.time())")
 
-    ffmpeg -y "$@" \
+    ffmpeg -nostdin -y "$@" \
         -vcodec prores_ks \
         -profile:v "$PROFILE_VAL" \
         -pix_fmt "$PIX_FMT" \

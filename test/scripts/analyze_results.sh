@@ -40,7 +40,7 @@ compute_psnr() {
     local STATS_FILE
     STATS_FILE=$(mktemp)
 
-    ffmpeg -y \
+    ffmpeg -nostdin -y \
         -framerate "$FPS" -i "$REF_DIR/$REF_PATTERN" \
         -i "$MOV_PATH" \
         -frames:v "$NUM_FRAMES" \
@@ -77,7 +77,7 @@ compute_ssim() {
     local STATS_FILE
     STATS_FILE=$(mktemp)
 
-    ffmpeg -y \
+    ffmpeg -nostdin -y \
         -framerate "$FPS" -i "$REF_DIR/$REF_PATTERN" \
         -i "$MOV_PATH" \
         -frames:v "$NUM_FRAMES" \
@@ -117,7 +117,7 @@ generate_diffs() {
     # Decode MOV to temp dir
     local DECODED_DIR
     DECODED_DIR=$(mktemp -d)
-    ffmpeg -y -i "$MOV_PATH" -pix_fmt rgba -start_number 0 \
+    ffmpeg -nostdin -y -i "$MOV_PATH" -pix_fmt rgba -start_number 0 \
         "$DECODED_DIR/frame_%04d.png" 2>/dev/null
 
     # Key frames: first (0), middle, last
@@ -132,7 +132,7 @@ generate_diffs() {
         local DIFF_FILE="$DIFF_DIR/frame_$(printf '%04d' "$FRAME_IDX")_diff.png"
 
         if [[ -f "$REF_FILE" && -f "$DEC_FILE" ]]; then
-            ffmpeg -y \
+            ffmpeg -nostdin -y \
                 -i "$REF_FILE" -i "$DEC_FILE" \
                 -filter_complex "[0:v]format=rgb24[a];[1:v]format=rgb24[b];[a][b]blend=all_mode=difference,eq=contrast=10" \
                 "$DIFF_FILE" 2>/dev/null || true
