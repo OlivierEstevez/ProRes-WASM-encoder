@@ -496,8 +496,8 @@ static uint8_t* write_stsd(uint8_t* p, MovMuxerContext* ctx)
     memcpy(p + 1, compressor, compressor_len);
     p += 32;
 
-    /* Depth */
-    WRITE_BE16(p, 24); p += 2;
+    /* Depth: 32 for ProRes 4444 with alpha, 24 otherwise */
+    WRITE_BE16(p, ctx->config.has_alpha ? 32 : 24); p += 2;
 
     /* Color table ID */
     WRITE_BE16(p, 0xFFFF); p += 2;

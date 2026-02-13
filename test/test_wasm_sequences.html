@@ -139,7 +139,14 @@
       max-height: 180px;
       border: 1px solid #222;
       border-radius: 4px;
-      background: #000;
+      background-image:
+        linear-gradient(45deg, #1a1a1a 25%, transparent 25%),
+        linear-gradient(-45deg, #1a1a1a 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #1a1a1a 75%),
+        linear-gradient(-45deg, transparent 75%, #1a1a1a 75%);
+      background-size: 16px 16px;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+      background-color: #2a2a2a;
     }
     .hidden { display: none; }
   </style>
@@ -438,6 +445,7 @@
 
           for (let i = 0; i < pngFiles.length && isEncoding; i++) {
             const img = await loadImageFromFile(pngFiles[i]);
+            offCtx.clearRect(0, 0, imgWidth, imgHeight);
             offCtx.drawImage(img, 0, 0);
             const imageData = offCtx.getImageData(0, 0, imgWidth, imgHeight);
             encoder.addFrameRgba(imageData.data);
@@ -448,6 +456,7 @@
 
             // Preview every 10 frames
             if (i % 10 === 0) {
+              previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
               previewCtx.drawImage(img, 0, 0, previewCanvas.width, previewCanvas.height);
               await new Promise(r => setTimeout(r, 0));
             }
