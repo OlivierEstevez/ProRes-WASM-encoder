@@ -41,38 +41,50 @@ static const int profile_bpp[6] = {
     110,  /* 4444 XQ - ~500 Mbps @ 1080p30 */
 };
 
-/* Quantization matrices for each profile (lower = higher quality) */
+/* Quantization matrices for each profile (from FFmpeg proresenc_kostya.c, raster order) */
 static const uint8_t quant_matrix_proxy[64] = {
-    8, 8, 8, 8, 8, 8, 8, 8,
-    8, 8, 8, 8, 8, 8, 8, 8,
-    8, 8, 8, 8, 8, 8, 8, 8,
-    8, 8, 8, 8, 8, 8, 8, 8,
-    8, 8, 8, 8, 8, 8, 8, 8,
-    8, 8, 8, 8, 8, 8, 8, 8,
-    8, 8, 8, 8, 8, 8, 8, 8,
-    8, 8, 8, 8, 8, 8, 8, 8,
+     4,  7,  9, 11, 13, 14, 15, 63,
+     7,  7, 11, 12, 14, 15, 63, 63,
+     9, 11, 13, 14, 15, 63, 63, 63,
+    11, 11, 13, 14, 63, 63, 63, 63,
+    11, 13, 14, 63, 63, 63, 63, 63,
+    13, 14, 63, 63, 63, 63, 63, 63,
+    13, 63, 63, 63, 63, 63, 63, 63,
+    63, 63, 63, 63, 63, 63, 63, 63,
+};
+
+/* Proxy uses a separate chroma matrix (from FFmpeg proresenc_kostya.c) */
+static const uint8_t quant_matrix_proxy_chroma[64] = {
+     4,  7,  9, 11, 13, 14, 63, 63,
+     7,  7, 11, 12, 14, 63, 63, 63,
+     9, 11, 13, 14, 63, 63, 63, 63,
+    11, 11, 13, 14, 63, 63, 63, 63,
+    11, 13, 14, 63, 63, 63, 63, 63,
+    13, 14, 63, 63, 63, 63, 63, 63,
+    13, 63, 63, 63, 63, 63, 63, 63,
+    63, 63, 63, 63, 63, 63, 63, 63,
 };
 
 static const uint8_t quant_matrix_lt[64] = {
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
+     4,  5,  6,  7,  9, 11, 13, 15,
+     5,  5,  7,  8, 11, 13, 15, 17,
+     6,  7,  9, 11, 13, 15, 15, 17,
+     7,  7,  9, 11, 13, 15, 17, 19,
+     7,  9, 11, 13, 14, 16, 19, 23,
+     9, 11, 13, 14, 16, 19, 23, 29,
+     9, 11, 13, 15, 17, 21, 28, 35,
+    11, 13, 16, 17, 21, 28, 35, 41,
 };
 
 static const uint8_t quant_matrix_std[64] = {
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4,
+     4,  4,  5,  5,  6,  7,  7,  9,
+     4,  4,  5,  6,  7,  7,  9,  9,
+     5,  5,  6,  7,  7,  9,  9, 10,
+     5,  5,  6,  7,  7,  9,  9, 10,
+     5,  6,  7,  7,  8,  9, 10, 12,
+     6,  7,  7,  8,  9, 10, 12, 15,
+     6,  7,  7,  9, 10, 11, 14, 17,
+     7,  7,  9, 10, 11, 14, 17, 21,
 };
 
 static const uint8_t quant_matrix_hq[64] = {
@@ -116,7 +128,8 @@ struct ProResEncoderContext {
     int log2_slice_mb_height;/* Log2 of slice_mb_height */
 
     /* Quantization */
-    uint8_t quant_matrix[64];
+    uint8_t quant_matrix[64];        /* Luma quantization matrix */
+    uint8_t chroma_quant_matrix[64]; /* Chroma quantization matrix */
     int q_scale;             /* Quantization scale factor */
     int bit_depth;
     int sample_center;
@@ -146,7 +159,7 @@ struct ProResEncoderContext {
     int last_dc[4];          /* Last DC values for differential coding */
 };
 
-/* Helper: Get quantization matrix for profile */
+/* Helper: Get luma quantization matrix for profile */
 static const uint8_t* get_quant_matrix(ProResProfile profile)
 {
     switch (profile) {
@@ -155,6 +168,15 @@ static const uint8_t* get_quant_matrix(ProResProfile profile)
         case PRORES_PROFILE_STANDARD:return quant_matrix_std;
         default:                     return quant_matrix_hq;
     }
+}
+
+/* Helper: Get chroma quantization matrix for profile
+ * Only Proxy uses a separate chroma matrix; all others use the same as luma */
+static const uint8_t* get_chroma_quant_matrix(ProResProfile profile)
+{
+    if (profile == PRORES_PROFILE_PROXY)
+        return quant_matrix_proxy_chroma;
+    return get_quant_matrix(profile);
 }
 
 /* Helper: Check if profile is 4:4:4 */
@@ -208,8 +230,9 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
     ctx->bit_depth = 10;
     ctx->sample_center = 1 << (ctx->bit_depth - 1);
 
-    /* Copy quantization matrix */
+    /* Copy quantization matrices */
     memcpy(ctx->quant_matrix, get_quant_matrix(config->profile), 64);
+    memcpy(ctx->chroma_quant_matrix, get_chroma_quant_matrix(config->profile), 64);
 
     /* Allocate plane buffers (16-bit for 10-bit data), using padded sizes */
     plane_size = ctx->padded_width * ctx->padded_height * sizeof(int16_t);
@@ -339,9 +362,9 @@ static int write_frame_header(ProResEncoderContext* ctx, uint8_t* buf)
         *p++ = ctx->quant_matrix[i];
     }
 
-    /* Write chroma quantization matrix (64 bytes) - same as luma for simplicity */
+    /* Write chroma quantization matrix (64 bytes) */
     for (int i = 0; i < 64; i++) {
-        *p++ = ctx->quant_matrix[i];
+        *p++ = ctx->chroma_quant_matrix[i];
     }
 
     /* Note: total frame header = 4 (size) + 4 (icpf) + 148 (header) = 156 bytes
@@ -656,9 +679,9 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
     /* Encode chroma U to temp buffer */
     PutBitContext u_pb;
     init_put_bits(&u_pb, u_data, ctx->slice_buf_capacity);
-    encode_dc_coeffs(&u_pb, u_blocks, chroma_block_count, ctx->quant_matrix, ctx->q_scale);
+    encode_dc_coeffs(&u_pb, u_blocks, chroma_block_count, ctx->chroma_quant_matrix, ctx->q_scale);
     encode_ac_coeffs_all(&u_pb, u_blocks, chroma_block_count,
-                         prores_scan, ctx->quant_matrix, ctx->q_scale);
+                         prores_scan, ctx->chroma_quant_matrix, ctx->q_scale);
 
     /* Byte-align chroma U */
     int u_bits = put_bits_count(&u_pb);
@@ -703,9 +726,9 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
     /* Encode chroma V to temp buffer */
     PutBitContext v_pb;
     init_put_bits(&v_pb, v_data, ctx->slice_buf_capacity);
-    encode_dc_coeffs(&v_pb, v_blocks, v_block_count, ctx->quant_matrix, ctx->q_scale);
+    encode_dc_coeffs(&v_pb, v_blocks, v_block_count, ctx->chroma_quant_matrix, ctx->q_scale);
     encode_ac_coeffs_all(&v_pb, v_blocks, v_block_count,
-                         prores_scan, ctx->quant_matrix, ctx->q_scale);
+                         prores_scan, ctx->chroma_quant_matrix, ctx->q_scale);
 
     /* Byte-align chroma V */
     int v_bits = put_bits_count(&v_pb);
