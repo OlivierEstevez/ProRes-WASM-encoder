@@ -107,6 +107,16 @@
       align-items: center;
       justify-content: center;
     }
+    #previewContainer canvas {
+      background-image:
+        linear-gradient(45deg, #1a1a1a 25%, transparent 25%),
+        linear-gradient(-45deg, #1a1a1a 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #1a1a1a 75%),
+        linear-gradient(-45deg, transparent 75%, #1a1a1a 75%);
+      background-size: 16px 16px;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+      background-color: #2a2a2a;
+    }
     .buttons {
       display: flex;
       gap: 10px;
@@ -811,7 +821,8 @@
           const file = pngFiles[i];
           const img = await loadImageFromFile(file);
 
-          // Draw to canvas
+          // Draw to canvas (clear first to avoid alpha compositing artifacts)
+          offscreenCtx.clearRect(0, 0, width, height);
           offscreenCtx.drawImage(img, 0, 0);
           const imageData = offscreenCtx.getImageData(0, 0, width, height);
 
@@ -825,6 +836,7 @@
           // Update preview (show current frame)
           ensureP5(width, height);
           const previewCtx = p5Instance.drawingContext;
+          previewCtx.clearRect(0, 0, p5Instance.width, p5Instance.height);
           previewCtx.drawImage(img, 0, 0);
 
           if (i % 5 === 0) {
