@@ -1,0 +1,8 @@
+test/reference
+test/suite-results
+test/outputs
+test/binaries
+test/diffs
+node_modules
+.git
+dist
