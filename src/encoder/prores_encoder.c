@@ -220,10 +220,8 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
     ctx->num_slices = ctx->slices_per_row * ctx->mb_height;
     ctx->slice_mb_count = ctx->slice_mb_width;  /* MBs per slice (may be less for last slice in row) */
 
-    /* Quality affects quantization scale (1..16, lower is higher quality) */
-    ctx->q_scale = 1 + (100 - config->quality) * 15 / 100;
-    if (ctx->q_scale < 1) ctx->q_scale = 1;
-    if (ctx->q_scale > 16) ctx->q_scale = 16;
+    /* Fixed quantization scale = 1 (best quality), matching FFmpeg's prores_ks default */
+    ctx->q_scale = 1;
 
     /* Always use 10-bit internally, matching FFmpeg (avctx->bits_per_raw_sample = 10).
      * This ensures DCT coefficients fit in int16_t (max DC = 32 * 1023 = 32736). */

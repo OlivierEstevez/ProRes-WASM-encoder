@@ -58,7 +58,6 @@ typedef struct {
     ProResProfile profile;
     ProResColorSpace colorspace;
     ProResFrameType frame_type;
-    int quality;           /* 0-100, higher is better */
     ProResColorRange range;
 } ProResEncoderConfig;
 

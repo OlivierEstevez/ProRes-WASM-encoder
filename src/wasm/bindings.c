@@ -29,7 +29,6 @@ typedef struct {
  * @param fps_num     Frame rate numerator
  * @param fps_den     Frame rate denominator
  * @param profile     Profile (0=proxy, 1=lt, 2=standard, 3=hq, 4=4444, 5=4444xq)
- * @param quality     Quality 0-100
  * @param range       Color range (0=limited, 1=full)
  * @return            Context pointer or 0 on failure
  */
@@ -37,7 +36,7 @@ EMSCRIPTEN_KEEPALIVE
 void* prores_wasm_create(
     int width, int height,
     int fps_num, int fps_den,
-    int profile, int quality,
+    int profile,
     int range)
 {
     ProResWasmContext* ctx = (ProResWasmContext*)calloc(1, sizeof(ProResWasmContext));
@@ -61,7 +60,6 @@ void* prores_wasm_create(
         .profile = (ProResProfile)profile,
         .colorspace = PRORES_CS_BT709,
         .frame_type = PRORES_FRAME_PROGRESSIVE,
-        .quality = quality,
         .range = ctx->range
     };
 
