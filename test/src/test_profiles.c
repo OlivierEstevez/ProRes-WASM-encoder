@@ -41,7 +41,7 @@ static int test_profile(ProResProfile profile, const char* name, const char* out
         .colorspace = PRORES_CS_BT709,
         .frame_type = PRORES_FRAME_PROGRESSIVE,
         .quality = 85,
-        .range = PRORES_RANGE_FULL
+        .range = PRORES_RANGE_LIMITED
     };
 
     ProResEncoderContext* encoder = prores_encoder_create(&enc_config);
@@ -58,7 +58,7 @@ static int test_profile(ProResProfile profile, const char* name, const char* out
         .fourcc = prores_encoder_get_fourcc(encoder),
         .bit_depth = 10,
         .has_alpha = 0,
-        .full_range = 1,
+        .full_range = 0,
         .color = { .primaries = 1, .transfer = 1, .matrix = 1 }
     };
 
@@ -73,7 +73,7 @@ static int test_profile(ProResProfile profile, const char* name, const char* out
     uint16_t* yuv = (uint16_t*)malloc(WIDTH * HEIGHT * 2 * sizeof(uint16_t));
 
     generate_test_frame(rgba, WIDTH, HEIGHT);
-    rgba_to_yuv422p10(rgba, yuv, WIDTH, HEIGHT, PRORES_RANGE_FULL);
+    rgba_to_yuv422p10(rgba, yuv, WIDTH, HEIGHT, PRORES_RANGE_LIMITED);
 
     uint8_t* frame_data = NULL;
     int frame_size = 0;

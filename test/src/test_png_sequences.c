@@ -83,7 +83,7 @@ static int encode_sequence(
         .colorspace = PRORES_CS_BT709,
         .frame_type = PRORES_FRAME_PROGRESSIVE,
         .quality = 100,
-        .range = PRORES_RANGE_FULL
+        .range = PRORES_RANGE_LIMITED
     };
 
     ProResEncoderContext* encoder = prores_encoder_create(&enc_config);
@@ -104,7 +104,7 @@ static int encode_sequence(
         .fourcc = prores_encoder_get_fourcc(encoder),
         .bit_depth = mux_bit_depth,
         .has_alpha = mux_has_alpha,
-        .full_range = 1,
+        .full_range = 0,
         .color = { .primaries = 1, .transfer = 1, .matrix = 1 }
     };
 
@@ -166,12 +166,12 @@ static int encode_sequence(
         /* Convert to YUV */
         if (prof->is_444) {
             if (has_alpha) {
-                rgba_to_yuva444p10(rgba, yuv_buffer, width, height, PRORES_RANGE_FULL);
+                rgba_to_yuva444p10(rgba, yuv_buffer, width, height, PRORES_RANGE_LIMITED);
             } else {
-                rgba_to_yuva444p10(rgba, yuv_buffer, width, height, PRORES_RANGE_FULL);
+                rgba_to_yuva444p10(rgba, yuv_buffer, width, height, PRORES_RANGE_LIMITED);
             }
         } else {
-            rgba_to_yuv422p10(rgba, yuv_buffer, width, height, PRORES_RANGE_FULL);
+            rgba_to_yuv422p10(rgba, yuv_buffer, width, height, PRORES_RANGE_LIMITED);
         }
 
         stbi_image_free(rgba);
