@@ -59,7 +59,7 @@ static int test_profile(ProResProfile profile, const char* name, const char* out
         .bit_depth = 10,
         .has_alpha = 0,
         .full_range = 1,
-        .color = { .primaries = 2, .transfer = 2, .matrix = 2 }
+        .color = { .primaries = 1, .transfer = 1, .matrix = 1 }
     };
 
     MovMuxerContext* muxer = mov_muxer_create(&mux_config);

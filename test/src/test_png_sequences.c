@@ -105,7 +105,7 @@ static int encode_sequence(
         .bit_depth = mux_bit_depth,
         .has_alpha = mux_has_alpha,
         .full_range = 1,
-        .color = { .primaries = 2, .transfer = 2, .matrix = 2 }
+        .color = { .primaries = 1, .transfer = 1, .matrix = 1 }
     };
 
     MovMuxerContext* muxer = mov_muxer_create(&mux_config);

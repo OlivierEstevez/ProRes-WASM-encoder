@@ -340,14 +340,14 @@ static int write_frame_header(ProResEncoderContext* ctx, uint8_t* buf)
     /* Reserved */
     *p++ = 0;
 
-    /* Color primaries (2=unspecified, matches FFmpeg prores_ks default; 9=BT.2020) */
-    *p++ = (ctx->config.colorspace == PRORES_CS_BT2020) ? 9 : 2;
+    /* Color primaries (1=BT.709, 9=BT.2020) */
+    *p++ = (ctx->config.colorspace == PRORES_CS_BT2020) ? 9 : 1;
 
-    /* Transfer function (2=unspecified, matches FFmpeg; 14=BT.2020) */
-    *p++ = (ctx->config.colorspace == PRORES_CS_BT2020) ? 14 : 2;
+    /* Transfer function (1=BT.709, 14=BT.2020) */
+    *p++ = (ctx->config.colorspace == PRORES_CS_BT2020) ? 14 : 1;
 
-    /* Matrix coefficients (2=unspecified, matches FFmpeg; 9=BT.2020) */
-    *p++ = (ctx->config.colorspace == PRORES_CS_BT2020) ? 9 : 2;
+    /* Matrix coefficients (1=BT.709, 9=BT.2020) */
+    *p++ = (ctx->config.colorspace == PRORES_CS_BT2020) ? 9 : 1;
 
     /* Alpha configuration byte (matches FFmpeg: 0x00=none, 0x02=16-bit alpha) */
     *p++ = is_444 ? 0x02 : 0x00;
