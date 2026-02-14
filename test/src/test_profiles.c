@@ -40,7 +40,6 @@ static int test_profile(ProResProfile profile, const char* name, const char* out
         .profile = profile,
         .colorspace = PRORES_CS_BT709,
         .frame_type = PRORES_FRAME_PROGRESSIVE,
-        .quality = 85,
         .range = PRORES_RANGE_LIMITED
     };
 

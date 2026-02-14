@@ -63,7 +63,6 @@ int main(int argc, char* argv[])
         .profile = PRORES_PROFILE_4444,
         .colorspace = PRORES_CS_BT709,
         .frame_type = PRORES_FRAME_PROGRESSIVE,
-        .quality = 100,
         .range = PRORES_RANGE_LIMITED
     };
 
