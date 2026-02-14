@@ -64,7 +64,7 @@ int main(int argc, char* argv[])
         .colorspace = PRORES_CS_BT709,
         .frame_type = PRORES_FRAME_PROGRESSIVE,
         .quality = 100,
-        .range = PRORES_RANGE_FULL
+        .range = PRORES_RANGE_LIMITED
     };
 
     ProResEncoderContext* encoder = prores_encoder_create(&enc_config);
@@ -81,7 +81,7 @@ int main(int argc, char* argv[])
         .fourcc = prores_encoder_get_fourcc(encoder),
         .bit_depth = 12,
         .has_alpha = 1,
-        .full_range = 1,
+        .full_range = 0,
         .color = { .primaries = 1, .transfer = 1, .matrix = 1 }
     };
 
@@ -109,7 +109,7 @@ int main(int argc, char* argv[])
         generate_test_frame(rgba_buffer, WIDTH, HEIGHT, frame, NUM_FRAMES);
 
         /* Convert to YUVA444P10 */
-        rgba_to_yuva444p10(rgba_buffer, yuva_buffer, WIDTH, HEIGHT, PRORES_RANGE_FULL);
+        rgba_to_yuva444p10(rgba_buffer, yuva_buffer, WIDTH, HEIGHT, PRORES_RANGE_LIMITED);
 
         uint8_t* frame_data = NULL;
         int frame_size = 0;

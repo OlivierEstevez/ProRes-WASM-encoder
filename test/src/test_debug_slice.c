@@ -40,7 +40,7 @@ int main(int argc, char* argv[])
             .colorspace = PRORES_CS_BT709,
             .frame_type = PRORES_FRAME_PROGRESSIVE,
             .quality = 100,
-            .range = PRORES_RANGE_FULL
+            .range = PRORES_RANGE_LIMITED
         };
 
         ProResEncoderContext* encoder = prores_encoder_create(&enc_config);
@@ -60,9 +60,9 @@ int main(int argc, char* argv[])
         uint16_t* yuv = (uint16_t*)malloc(yuv_size);
 
         if (is_444) {
-            rgba_to_yuva444p10(rgba, yuv, w, h, PRORES_RANGE_FULL);
+            rgba_to_yuva444p10(rgba, yuv, w, h, PRORES_RANGE_LIMITED);
         } else {
-            rgba_to_yuv422p10(rgba, yuv, w, h, PRORES_RANGE_FULL);
+            rgba_to_yuv422p10(rgba, yuv, w, h, PRORES_RANGE_LIMITED);
         }
 
         uint8_t* frame_data = NULL;
@@ -79,7 +79,7 @@ int main(int argc, char* argv[])
                 .fourcc = prores_encoder_get_fourcc(encoder),
                 .bit_depth = is_444 ? 12 : 10,
                 .has_alpha = is_444 ? 1 : 0,
-                .full_range = 1,
+                .full_range = 0,
                 .color = { .primaries = 1, .transfer = 1, .matrix = 1 }
             };
             MovMuxerContext* muxer = mov_muxer_create(&mux_config);

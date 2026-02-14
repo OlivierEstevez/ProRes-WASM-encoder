@@ -46,7 +46,11 @@ void* prores_wasm_create(
     ctx->width = width;
     ctx->height = height;
     ctx->profile = profile;
-    ctx->range = (range != 0) ? PRORES_RANGE_FULL : PRORES_RANGE_LIMITED;
+    /* Always use limited/TV range for maximum decoder compatibility.
+     * The range parameter is accepted but currently ignored.
+     * Full-range support is preserved in the conversion functions for future use. */
+    (void)range;
+    ctx->range = PRORES_RANGE_LIMITED;
 
     /* Create encoder */
     ProResEncoderConfig enc_config = {
@@ -82,7 +86,7 @@ void* prores_wasm_create(
             .transfer = 1,
             .matrix = 1
         },
-        .full_range = (ctx->range == PRORES_RANGE_FULL)
+        .full_range = 0
     };
 
     ctx->muxer = mov_muxer_create(&mux_config);
