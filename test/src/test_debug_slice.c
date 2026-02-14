@@ -80,7 +80,7 @@ int main(int argc, char* argv[])
                 .bit_depth = is_444 ? 12 : 10,
                 .has_alpha = is_444 ? 1 : 0,
                 .full_range = 1,
-                .color = { .primaries = 2, .transfer = 2, .matrix = 2 }
+                .color = { .primaries = 1, .transfer = 1, .matrix = 1 }
             };
             MovMuxerContext* muxer = mov_muxer_create(&mux_config);
             if (muxer) {
