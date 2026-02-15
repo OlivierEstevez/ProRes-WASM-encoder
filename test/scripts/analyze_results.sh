@@ -177,7 +177,7 @@ while IFS='|' read -r NAME DIR WIDTH HEIGHT FPS_NUM FPS_DEN NUM_FRAMES HAS_ALPHA
     echo "  \"results\": {" >> "$METRICS_FILE"
 
     FIRST_ENCODER=true
-    for ENCODER in native ffmpeg wasm; do
+    for ENCODER in native ffmpeg ffmpeg-default wasm; do
         ENCODER_DIR="$SEQ_RESULTS/$ENCODER"
         [[ -d "$ENCODER_DIR" ]] || continue
 

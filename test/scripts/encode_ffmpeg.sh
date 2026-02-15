@@ -22,22 +22,29 @@ if ! command -v ffmpeg &>/dev/null; then
 fi
 
 # Profile encoding parameters
-# Args: profile_value pix_fmt output_path input_args...
+# Args: profile_value pix_fmt output_path [qscale] input_args...
+# If qscale is provided (non-empty), adds -qscale:v <value>
 encode_profile() {
     local PROFILE_VAL="$1"
     local PIX_FMT="$2"
     local OUTPUT="$3"
-    shift 3
+    local QSCALE="$4"
+    shift 4
     # Remaining args are input args
 
     local START_TIME
     START_TIME=$(python3 -c "import time; print(time.time())")
 
+    local QSCALE_ARGS=()
+    if [[ -n "$QSCALE" ]]; then
+        QSCALE_ARGS=(-qscale:v "$QSCALE")
+    fi
+
     ffmpeg -nostdin -y "$@" \
         -vcodec prores_ks \
         -profile:v "$PROFILE_VAL" \
         -pix_fmt "$PIX_FMT" \
-        -qscale:v 1 \
+        ${QSCALE_ARGS[@]+"${QSCALE_ARGS[@]}"} \
         -vendor apl0 \
         "$OUTPUT" 2>/dev/null
 
@@ -63,53 +70,62 @@ while IFS='|' read -r NAME DIR WIDTH HEIGHT FPS_NUM FPS_DEN NUM_FRAMES HAS_ALPHA
     fi
 
     INPUT_DIR="$REF_DIR/$DIR"
-    OUTPUT_DIR="$RESULTS_DIR/$NAME/ffmpeg"
-
-    echo "=== Encoding: $NAME ==="
-    echo "  Input:  $INPUT_DIR"
-    echo "  Output: $OUTPUT_DIR"
-
-    mkdir -p "$OUTPUT_DIR"
-
-    # Common ffmpeg input args
     FPS="$FPS_NUM/$FPS_DEN"
     INPUT_ARGS=(-framerate "$FPS" -i "$INPUT_DIR/$PATTERN" -frames:v "$NUM_FRAMES")
 
-    if [[ "$HAS_ALPHA" == "0" ]]; then
-        # Non-alpha: encode all 6 profiles
-        echo "  Encoding 422 profiles (Proxy, LT, Standard, HQ)..."
+    # Encode with both modes: qscale=1 (matches our encoder) and default (adaptive trellis)
+    for MODE in ffmpeg ffmpeg-default; do
+        OUTPUT_DIR="$RESULTS_DIR/$NAME/$MODE"
 
-        echo "    Proxy..."
-        encode_profile 0 yuv422p10le "$OUTPUT_DIR/proxy.mov" "${INPUT_ARGS[@]}"
+        if [[ "$MODE" == "ffmpeg" ]]; then
+            QSCALE="1"
+            echo "=== Encoding: $NAME (FFmpeg qscale=1) ==="
+        else
+            QSCALE=""
+            echo "=== Encoding: $NAME (FFmpeg default/adaptive) ==="
+        fi
 
-        echo "    LT..."
-        encode_profile 1 yuv422p10le "$OUTPUT_DIR/lt.mov" "${INPUT_ARGS[@]}"
+        echo "  Input:  $INPUT_DIR"
+        echo "  Output: $OUTPUT_DIR"
 
-        echo "    Standard..."
-        encode_profile 2 yuv422p10le "$OUTPUT_DIR/standard.mov" "${INPUT_ARGS[@]}"
+        mkdir -p "$OUTPUT_DIR"
 
-        echo "    HQ..."
-        encode_profile 3 yuv422p10le "$OUTPUT_DIR/hq.mov" "${INPUT_ARGS[@]}"
+        if [[ "$HAS_ALPHA" == "0" ]]; then
+            # Non-alpha: encode all 6 profiles
+            echo "  Encoding 422 profiles (Proxy, LT, Standard, HQ)..."
 
-        echo "  Encoding 4444 profiles..."
+            echo "    Proxy..."
+            encode_profile 0 yuv422p10le "$OUTPUT_DIR/proxy.mov" "$QSCALE" "${INPUT_ARGS[@]}"
 
-        echo "    4444..."
-        encode_profile 4 yuv444p10le "$OUTPUT_DIR/4444.mov" "${INPUT_ARGS[@]}"
+            echo "    LT..."
+            encode_profile 1 yuv422p10le "$OUTPUT_DIR/lt.mov" "$QSCALE" "${INPUT_ARGS[@]}"
 
-        echo "    4444XQ..."
-        encode_profile 5 yuv444p10le "$OUTPUT_DIR/4444xq.mov" "${INPUT_ARGS[@]}"
-    else
-        # Alpha: only 4444 profiles with alpha pixel format
-        echo "  Encoding 4444 profiles with alpha..."
+            echo "    Standard..."
+            encode_profile 2 yuv422p10le "$OUTPUT_DIR/standard.mov" "$QSCALE" "${INPUT_ARGS[@]}"
 
-        echo "    4444..."
-        encode_profile 4 yuva444p10le "$OUTPUT_DIR/4444.mov" "${INPUT_ARGS[@]}"
+            echo "    HQ..."
+            encode_profile 3 yuv422p10le "$OUTPUT_DIR/hq.mov" "$QSCALE" "${INPUT_ARGS[@]}"
 
-        echo "    4444XQ..."
-        encode_profile 5 yuva444p10le "$OUTPUT_DIR/4444xq.mov" "${INPUT_ARGS[@]}"
-    fi
+            echo "  Encoding 4444 profiles..."
 
-    echo ""
+            echo "    4444..."
+            encode_profile 4 yuv444p10le "$OUTPUT_DIR/4444.mov" "$QSCALE" "${INPUT_ARGS[@]}"
+
+            echo "    4444XQ..."
+            encode_profile 5 yuv444p10le "$OUTPUT_DIR/4444xq.mov" "$QSCALE" "${INPUT_ARGS[@]}"
+        else
+            # Alpha: only 4444 profiles with alpha pixel format
+            echo "  Encoding 4444 profiles with alpha..."
+
+            echo "    4444..."
+            encode_profile 4 yuva444p10le "$OUTPUT_DIR/4444.mov" "$QSCALE" "${INPUT_ARGS[@]}"
+
+            echo "    4444XQ..."
+            encode_profile 5 yuva444p10le "$OUTPUT_DIR/4444xq.mov" "$QSCALE" "${INPUT_ARGS[@]}"
+        fi
+
+        echo ""
+    done
 done < "$CONF"
 
 echo "=== FFmpeg encoding complete ==="

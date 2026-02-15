@@ -70,7 +70,7 @@ while IFS='|' read -r NAME DIR WIDTH HEIGHT FPS_NUM FPS_DEN NUM_FRAMES HAS_ALPHA
 
     # Which encoders are present?
     ENCODERS=()
-    for ENC in native ffmpeg wasm; do
+    for ENC in native ffmpeg ffmpeg-default wasm; do
         if python3 -c "
 import json
 with open('$METRICS') as f:
