@@ -158,10 +158,10 @@ Maps profile values to display names (e.g., `ProfileNames[ProResProfile.HQ]` ret
 
 | Profile | Constant | Approx. Bitrate (1080p30) | Best For |
 |---------|----------|---------------------------|----------|
-| Proxy | `ProResProfile.PROXY` | ~45 Mbps | Lightweight proxies for offline editing |
-| LT | `ProResProfile.LT` | ~102 Mbps | Editing with limited storage |
-| Standard | `ProResProfile.STANDARD` | ~147 Mbps | General-purpose editing |
-| HQ | `ProResProfile.HQ` | ~220 Mbps | High quality mastering (recommended) |
+| 422 Proxy | `ProResProfile.PROXY` | ~45 Mbps | Lightweight proxies for offline editing |
+| 422 LT | `ProResProfile.LT` | ~102 Mbps | Editing with limited storage |
+| 422 Standard | `ProResProfile.STANDARD` | ~147 Mbps | General-purpose editing |
+| 422 HQ | `ProResProfile.HQ` | ~220 Mbps | High quality mastering (recommended) |
 | 4444 | `ProResProfile.P4444` | ~330 Mbps | Content with alpha transparency |
 | 4444 XQ | `ProResProfile.P4444XQ` | ~500 Mbps | Maximum quality with alpha |
 
