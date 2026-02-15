@@ -31,9 +31,11 @@ export interface ProResEncoderOptions {
   width: number;
   /** Frame height in pixels */
   height: number;
-  /** Frame rate numerator (default: 30) */
+  /** Frame rate (e.g. 23.976, 30, 60). Standard rates like 23.976 and 29.97 are mapped to exact num/den pairs. Default: 30 */
+  frameRate?: number;
+  /** Frame rate numerator — advanced override, takes precedence over frameRate when both num and den are provided */
   frameRateNum?: number;
-  /** Frame rate denominator (default: 1) */
+  /** Frame rate denominator — advanced override, takes precedence over frameRate when both num and den are provided */
   frameRateDen?: number;
   /** ProRes profile (default: HQ) */
   profile?: ProResProfileType;
