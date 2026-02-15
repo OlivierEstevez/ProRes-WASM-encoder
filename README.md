@@ -29,8 +29,7 @@ const encoder = await createProResEncoder();
 encoder.initialize({
   width: 1920,
   height: 1080,
-  frameRateNum: 24000,
-  frameRateDen: 1001,  // 23.976 fps
+  frameRate: 30,
   profile: ProResProfile.HQ,
 });
 
@@ -49,39 +48,6 @@ downloadMov(movData, 'my-video.mov');
 encoder.destroy();
 ```
 
-### Recording a Canvas Animation
-
-```javascript
-import { createProResEncoder, ProResProfile, downloadMov } from 'prores-wasm';
-
-const canvas = document.getElementById('canvas');
-const encoder = await createProResEncoder();
-
-encoder.initialize({
-  width: canvas.width,
-  height: canvas.height,
-  frameRateNum: 30,
-  frameRateDen: 1,
-  profile: ProResProfile.HQ,
-});
-
-// Capture each frame of your animation loop
-function animate(frame) {
-  renderScene(canvas, frame);       // Your render logic
-  encoder.addFrameFromCanvas(canvas);
-
-  if (frame < totalFrames) {
-    requestAnimationFrame(() => animate(frame + 1));
-  } else {
-    const movData = encoder.finalize();
-    downloadMov(movData, 'animation.mov');
-    encoder.destroy();
-  }
-}
-
-animate(0);
-```
-
 ## API Reference
 
 ### `createProResEncoder(): Promise<ProResEncoder>`
@@ -96,8 +62,9 @@ Initialize the encoder with the specified options:
 |--------|------|---------|-------------|
 | `width` | number | required | Frame width in pixels |
 | `height` | number | required | Frame height in pixels |
-| `frameRateNum` | number | `30` | Frame rate numerator |
-| `frameRateDen` | number | `1` | Frame rate denominator |
+| `frameRate` | number | `30` | Frame rate (e.g. `23.976`, `30`, `60`). Standard rates are mapped to exact num/den pairs |
+| `frameRateNum` | number | | Advanced: explicit numerator (overrides `frameRate` when both num and den are set) |
+| `frameRateDen` | number | | Advanced: explicit denominator (overrides `frameRate` when both num and den are set) |
 | `profile` | ProResProfile | `HQ` | ProRes profile to use |
 | `range` | string | `"limited"` | Color range: `"limited"` (TV/studio) or `"full"` |
 
@@ -169,17 +136,28 @@ Maps profile values to display names (e.g., `ProfileNames[ProResProfile.HQ]` ret
 
 ## Frame Rates
 
-Use numerator/denominator pairs for precise frame rates:
+Just pass the frame rate as a number:
 
-| Frame Rate | Numerator | Denominator |
-|------------|-----------|-------------|
-| 23.976 fps | 24000 | 1001 |
-| 24 fps | 24 | 1 |
-| 25 fps | 25 | 1 |
-| 29.97 fps | 30000 | 1001 |
-| 30 fps | 30 | 1 |
-| 59.94 fps | 60000 | 1001 |
-| 60 fps | 60 | 1 |
+```javascript
+encoder.initialize({
+  width: 1920,
+  height: 1080,
+  framerate: 23.976,
+  profile: ProResProfile.HQ,
+})
+```
+
+For fractional framerates, you can also use `frameRateNum`/`frameRateDen`:
+
+```javascript
+encoder.initialize({
+  width: 1920,
+  height: 1080,
+  frameRateNum: 24000,
+  frameRateDen: 1001,
+  profile: ProResProfile.HQ,
+});
+```
 
 ## Limits
 
