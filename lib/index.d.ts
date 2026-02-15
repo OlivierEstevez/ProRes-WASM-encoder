@@ -27,9 +27,9 @@ export declare const ProfileNames: {
  * Encoder initialization options
  */
 export interface ProResEncoderOptions {
-  /** Frame width (must be multiple of 16) */
+  /** Frame width in pixels */
   width: number;
-  /** Frame height (must be multiple of 16) */
+  /** Frame height in pixels */
   height: number;
   /** Frame rate numerator (default: 30) */
   frameRateNum?: number;

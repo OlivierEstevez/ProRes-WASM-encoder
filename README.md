@@ -1,15 +1,15 @@
 # ProRes WASM Encoder
 
-A WebAssembly-based Apple ProRes encoder for encoding canvas frames to ProRes MOV files directly in the browser.
+A WebAssembly-based Apple ProRes encoder that encodes canvas frames to `.mov` files directly in the browser. No server required.
 
 ## Features
 
-- **All ProRes Profiles**: Proxy, LT, Standard, HQ, 4444, 4444 XQ
-- **Alpha Channel Support**: Full alpha channel encoding with 4444 profiles
-- **Arbitrary Frame Rates**: Support for any frame rate (24, 29.97, 30, 60, etc.)
-- **Canvas Integration**: Direct encoding from HTML canvas elements
-- **10-bit Color**: Professional-grade 10-bit YUV encoding
-- **Pure WASM**: No server-side processing required
+- **All ProRes Profiles**: Proxy, LT, Standard, HQ, 4444, and 4444 XQ
+- **Alpha Channel**: Full transparency support with 4444 profiles
+- **QuickTime .mov Output**: With any framerate or resolution
+- **Canvas Integration**: Encode directly from `HTMLCanvasElement` or `OffscreenCanvas`
+- **Professional Color**: Internal 10-bit YUV encoding with BT.709 color matrix
+- **Pure WASM**: Runs entirely in the browser, no server-side processing
 
 ## Installation
 
@@ -32,7 +32,6 @@ encoder.initialize({
   frameRateNum: 24000,
   frameRateDen: 1001,  // 23.976 fps
   profile: ProResProfile.HQ,
-  quality: 85
 });
 
 // Encode frames from canvas
@@ -42,7 +41,7 @@ for (let i = 0; i < 100; i++) {
   encoder.addFrameFromCanvas(canvas);
 }
 
-// Get MOV file and download
+// Download the .mov file
 const movData = encoder.finalize();
 downloadMov(movData, 'my-video.mov');
 
@@ -50,11 +49,44 @@ downloadMov(movData, 'my-video.mov');
 encoder.destroy();
 ```
 
+### Recording a Canvas Animation
+
+```javascript
+import { createProResEncoder, ProResProfile, downloadMov } from 'prores-wasm';
+
+const canvas = document.getElementById('canvas');
+const encoder = await createProResEncoder();
+
+encoder.initialize({
+  width: canvas.width,
+  height: canvas.height,
+  frameRateNum: 30,
+  frameRateDen: 1,
+  profile: ProResProfile.HQ,
+});
+
+// Capture each frame of your animation loop
+function animate(frame) {
+  renderScene(canvas, frame);       // Your render logic
+  encoder.addFrameFromCanvas(canvas);
+
+  if (frame < totalFrames) {
+    requestAnimationFrame(() => animate(frame + 1));
+  } else {
+    const movData = encoder.finalize();
+    downloadMov(movData, 'animation.mov');
+    encoder.destroy();
+  }
+}
+
+animate(0);
+```
+
 ## API Reference
 
 ### `createProResEncoder(): Promise<ProResEncoder>`
 
-Creates a new ProRes encoder instance.
+Creates and returns a new encoder instance. The WASM module is loaded automatically.
 
 ### `ProResEncoder.initialize(options)`
 
@@ -62,47 +94,82 @@ Initialize the encoder with the specified options:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `width` | number | required | Frame width (must be multiple of 16) |
-| `height` | number | required | Frame height (must be multiple of 16) |
-| `frameRateNum` | number | 30 | Frame rate numerator |
-| `frameRateDen` | number | 1 | Frame rate denominator |
-| `profile` | ProResProfile | HQ | ProRes profile |
-| `quality` | number | 85 | Quality (0-100) |
+| `width` | number | required | Frame width in pixels |
+| `height` | number | required | Frame height in pixels |
+| `frameRateNum` | number | `30` | Frame rate numerator |
+| `frameRateDen` | number | `1` | Frame rate denominator |
+| `profile` | ProResProfile | `HQ` | ProRes profile to use |
+| `range` | string | `"limited"` | Color range: `"limited"` (TV/studio) or `"full"` |
 
-### `ProResEncoder.addFrameRgba(rgbaData: Uint8Array)`
+### `ProResEncoder.addFrameRgba(rgbaData)`
 
-Add a frame from raw RGBA data (width × height × 4 bytes).
+Add a frame from raw RGBA pixel data (`Uint8Array` or `Uint8ClampedArray`, must be `width * height * 4` bytes).
 
-### `ProResEncoder.addFrameFromCanvas(canvas: HTMLCanvasElement)`
+### `ProResEncoder.addFrameFromCanvas(canvas)`
 
-Add a frame directly from a canvas element.
+Add a frame directly from an `HTMLCanvasElement` or `OffscreenCanvas`.
 
-### `ProResEncoder.addFrameFromImageData(imageData: ImageData)`
+### `ProResEncoder.addFrameFromImageData(imageData)`
 
-Add a frame from an ImageData object.
+Add a frame from an `ImageData` object (e.g., from `ctx.getImageData()`).
 
 ### `ProResEncoder.finalize(): Uint8Array`
 
-Finalize encoding and return the MOV file data.
+Finalize encoding and return the `.mov` file as a `Uint8Array`.
 
 ### `ProResEncoder.destroy()`
 
-Free all resources.
+Free all WASM memory and resources. Always call this when done encoding.
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `frameCount` | number | Number of frames encoded so far |
+| `width` | number | Encoder width |
+| `height` | number | Encoder height |
+| `initialized` | boolean | Whether the encoder is initialized |
+
+### Helper Functions
+
+#### `downloadMov(movData, filename?)`
+
+Triggers a browser download of the `.mov` file. Default filename is `"output.mov"`.
+
+#### `movToBlob(movData): Blob`
+
+Converts the `Uint8Array` to a `Blob` with MIME type `video/quicktime`.
+
+#### `movToObjectUrl(movData): string`
+
+Converts the `Uint8Array` to an Object URL. Remember to call `URL.revokeObjectURL()` when done.
+
+### Constants
+
+#### `ProResProfile`
+
+Profile enum with values: `PROXY` (0), `LT` (1), `STANDARD` (2), `HQ` (3), `P4444` (4), `P4444XQ` (5).
+
+#### `ProfileNames`
+
+Maps profile values to display names (e.g., `ProfileNames[ProResProfile.HQ]` returns `"ProRes 422 HQ"`). Useful for building profile selector UIs.
 
 ## ProRes Profiles
 
-| Profile | Constant | Bitrate (1080p30) | Use Case |
-|---------|----------|-------------------|----------|
-| Proxy | `ProResProfile.PROXY` | ~45 Mbps | Offline editing |
-| LT | `ProResProfile.LT` | ~102 Mbps | Light editing |
-| Standard | `ProResProfile.STANDARD` | ~147 Mbps | Standard workflows |
-| HQ | `ProResProfile.HQ` | ~220 Mbps | High quality (recommended) |
-| 4444 | `ProResProfile.P4444` | ~330 Mbps | With alpha channel |
-| 4444 XQ | `ProResProfile.P4444XQ` | ~500 Mbps | Maximum quality |
+| Profile | Constant | Approx. Bitrate (1080p30) | Best For |
+|---------|----------|---------------------------|----------|
+| Proxy | `ProResProfile.PROXY` | ~45 Mbps | Lightweight proxies for offline editing |
+| LT | `ProResProfile.LT` | ~102 Mbps | Editing with limited storage |
+| Standard | `ProResProfile.STANDARD` | ~147 Mbps | General-purpose editing |
+| HQ | `ProResProfile.HQ` | ~220 Mbps | High quality mastering (recommended) |
+| 4444 | `ProResProfile.P4444` | ~330 Mbps | Content with alpha transparency |
+| 4444 XQ | `ProResProfile.P4444XQ` | ~500 Mbps | Maximum quality with alpha |
+
+> Bitrates are approximate and vary with content complexity.
 
 ## Frame Rates
 
-Use numerator/denominator for precise frame rates:
+Use numerator/denominator pairs for precise frame rates:
 
 | Frame Rate | Numerator | Denominator |
 |------------|-----------|-------------|
@@ -114,76 +181,9 @@ Use numerator/denominator for precise frame rates:
 | 59.94 fps | 60000 | 1001 |
 | 60 fps | 60 | 1 |
 
-## Building from Source
+## Limits
 
-### Prerequisites
-
-- Docker (for Emscripten build)
-- Node.js 18+
-- npm
-
-### Build Steps
-
-```bash
-# Clone repository
-git clone https://github.com/your-repo/prores-wasm
-cd prores-wasm
-
-# Install dependencies
-npm install
-
-# Build WASM module (requires Docker)
-npm run build:wasm
-
-# Build JavaScript wrapper
-npm run build:js
-
-# Or build everything
-npm run build
-```
-
-### Native Testing
-
-You can test the encoder natively without WASM:
-
-```bash
-# Compile native test
-cd test
-gcc -o test_native test_native.c \
-    ../src/encoder/*.c \
-    ../src/muxer/*.c \
-    -I../src -lm
-
-# Run test
-./test_native output.mov
-```
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  JavaScript API                                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │ ProResEncoder class                                       │   │
-│  │ - initialize(), addFrameRgba(), finalize(), destroy()    │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                    ┌─────────▼─────────┐
-                    │ Emscripten WASM   │
-                    │ Bindings          │
-                    └─────────┬─────────┘
-                              │
-┌─────────────────────────────▼───────────────────────────────────┐
-│  WASM Module (C)                                                │
-│  ┌────────────────────┐    ┌────────────────────────────────┐  │
-│  │ ProRes Encoder     │    │ MOV Muxer                      │  │
-│  │ - DCT transform    │    │ - QuickTime container format   │  │
-│  │ - Quantization     │    │ - Sample tables                │  │
-│  │ - VLC coding       │    │ - Color metadata               │  │
-│  └────────────────────┘    └────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-```
+- **WASM memory ceiling**: 2 GB — the maximum number of frames depends on resolution and profile
 
 ## Browser Support
 
@@ -196,7 +196,7 @@ Requires WebAssembly support.
 
 ## Performance
 
-Typical encoding speeds on modern hardware:
+Approximate encoding speeds on modern hardware:
 
 | Resolution | Profile | Speed |
 |------------|---------|-------|
@@ -204,7 +204,7 @@ Typical encoding speeds on modern hardware:
 | 1080p | HQ | ~8-12 fps |
 | 4K | HQ | ~2-4 fps |
 
-Performance depends on CPU, profile, and quality settings.
+> Speeds vary with CPU, profile, and content complexity.
 
 ## License
 
@@ -212,12 +212,11 @@ MIT License
 
 ## Acknowledgments
 
-- Based on ProRes codec reverse engineering by FFmpeg project
+- Based on ProRes codec reverse engineering by the FFmpeg project
 - MOV container format based on Apple QuickTime File Format specification
-- Inspired by [h264-mp4-encoder](https://github.com/TrevorSundberg/h264-mp4-encoder) architecture
+- Inspired by [h264-mp4-encoder](https://github.com/TrevorSundberg/h264-mp4-encoder) architecture and [mp4-wasm](https://github.com/mattdesl/mp4-wasm/?tab=readme-ov-file)
 
 ## Related Projects
 
 - [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm) - Full FFmpeg in WebAssembly
-- [mp4-wasm](https://github.com/ArnoldoRios/mp4-wasm) - H.264 MP4 muxer in WASM
-- [webm-wasm](https://github.com/nickswalker/webm-wasm) - WebM encoder in WASM
+- [webm-wasm](https://github.com/GoogleChromeLabs/webm-wasm) - WebM encoder in WASM

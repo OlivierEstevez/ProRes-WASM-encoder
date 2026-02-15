@@ -13,9 +13,6 @@
 extern "C" {
 #endif
 
-/* Maximum number of samples (frames) */
-#define MOV_MAX_SAMPLES 100000
-
 /* MOV Muxer context (opaque) */
 typedef struct MovMuxerContext MovMuxerContext;
 
