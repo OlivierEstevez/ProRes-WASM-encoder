@@ -5,6 +5,14 @@
   "main": "dist/prores-encoder.js",
   "module": "dist/prores-encoder.esm.js",
   "types": "dist/prores-encoder.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/prores-encoder.esm.js",
+      "require": "./dist/prores-encoder.js",
+      "types": "./dist/prores-encoder.d.ts"
+    }
+  },
+  "sideEffects": false,
   "files": [
     "dist"
   ],
@@ -25,14 +33,18 @@
     "mov",
     "quicktime"
   ],
-  "author": "",
+  "author": "Olivier Estevez",
   "license": "MIT",
-  "devDependencies": {
-    "rollup": "^4.0.0",
-    "@rollup/plugin-node-resolve": "^15.0.0"
+  "homepage": "https://github.com/OlivierEstevez/ProRes-WASM-encoder#readme",
+  "bugs": {
+    "url": "https://github.com/OlivierEstevez/ProRes-WASM-encoder/issues"
   },
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "https://github.com/OlivierEstevez/ProRes-WASM-encoder"
+  },
+  "devDependencies": {
+    "rollup": "^4.0.0",
+    "@rollup/plugin-node-resolve": "^15.0.0"
   }
 }
