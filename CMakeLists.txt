@@ -75,8 +75,8 @@ if(EMSCRIPTEN)
 
     string(REPLACE ";" " " EMSCRIPTEN_LINK_FLAGS_STR "${EMSCRIPTEN_LINK_FLAGS}")
 
-    add_executable(prores-encoder ${ALL_SOURCES})
-    set_target_properties(prores-encoder PROPERTIES LINK_FLAGS "${EMSCRIPTEN_LINK_FLAGS_STR}")
+    add_executable(prores-encoder.wasm ${ALL_SOURCES})
+    set_target_properties(prores-encoder.wasm PROPERTIES LINK_FLAGS "${EMSCRIPTEN_LINK_FLAGS_STR}")
 
 else()
     # Native build for testing

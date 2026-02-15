@@ -1,4 +1,5 @@
 import { nodeResolve } from '@rollup/plugin-node-resolve';
+import terser from '@rollup/plugin-terser';
 import { copyFileSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 
@@ -14,25 +15,48 @@ function copyTypes() {
   };
 }
 
-export default {
-  input: 'lib/index.js',
-  output: [
-    {
+export default [
+  // UMD build (works with require() and <script> tag global)
+  {
+    input: 'lib/index.js',
+    output: {
+      file: 'dist/prores-encoder.js',
+      format: 'umd',
+      name: 'ProRes',
+      sourcemap: true
+    },
+    plugins: [
+      nodeResolve(),
+      copyTypes()
+    ],
+    external: []
+  },
+  // UMD build (minified, for CDN <script> tag)
+  {
+    input: 'lib/index.js',
+    output: {
+      file: 'dist/prores-encoder.min.js',
+      format: 'umd',
+      name: 'ProRes',
+      sourcemap: true
+    },
+    plugins: [
+      nodeResolve(),
+      terser()
+    ],
+    external: []
+  },
+  // ESM build (for npm import)
+  {
+    input: 'lib/index.js',
+    output: {
       file: 'dist/prores-encoder.esm.js',
       format: 'es',
       sourcemap: true
     },
-    {
-      file: 'dist/prores-encoder.js',
-      format: 'cjs',
-      sourcemap: true,
-      exports: 'named'
-    }
-  ],
-  plugins: [
-    nodeResolve(),
-    copyTypes()
-  ],
-  external: []
-};
-
+    plugins: [
+      nodeResolve()
+    ],
+    external: []
+  }
+];

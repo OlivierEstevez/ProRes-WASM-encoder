@@ -17,9 +17,10 @@
     "dist"
   ],
   "scripts": {
+    "clean": "rm -rf dist",
     "build:wasm": "./build/build.sh",
     "build:js": "rollup -c",
-    "build": "npm run build:wasm && npm run build:js",
+    "build": "npm run clean && npm run build:wasm && npm run build:js",
     "test": "node test/test.js",
     "demo": "npx serve test"
   },
@@ -44,7 +45,8 @@
     "url": "https://github.com/OlivierEstevez/ProRes-WASM-encoder"
   },
   "devDependencies": {
-    "rollup": "^4.0.0",
-    "@rollup/plugin-node-resolve": "^15.0.0"
+    "@rollup/plugin-node-resolve": "^15.0.0",
+    "@rollup/plugin-terser": "^0.4.4",
+    "rollup": "^4.0.0"
   }
 }
