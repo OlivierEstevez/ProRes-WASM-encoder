@@ -9,19 +9,20 @@
 
 /* Codebook tables from FFmpeg proresenc_kostya.c
  * Format: (rice_order << 5) | (exp_order << 2) | (switch_bits - 1)
+ * Non-static so they can be accessed by the encoder for bit estimation.
  */
-static const uint8_t run_to_cb[16] = {
+const uint8_t prores_run_to_cb[16] = {
     0x06, 0x06, 0x05, 0x05, 0x04, 0x29, 0x29, 0x29,
     0x29, 0x28, 0x28, 0x28, 0x28, 0x28, 0x28, 0x4C
 };
 
-static const uint8_t lev_to_cb[10] = {
+const uint8_t prores_lev_to_cb[10] = {
     0x04, 0x0A, 0x05, 0x06, 0x04, 0x28, 0x28, 0x28, 0x28, 0x4C
 };
 
 /* DC codebook table from FFmpeg's proresdata.c
  * Index by MIN(previous_code, 6) to select codebook for current DC */
-static const uint8_t dc_codebook[7] = { 0x04, 0x28, 0x28, 0x4D, 0x4D, 0x70, 0x70 };
+const uint8_t prores_dc_codebook[7] = { 0x04, 0x28, 0x28, 0x4D, 0x4D, 0x70, 0x70 };
 #define FIRST_DC_CB 0xB8
 
 /* Simple log2 for small integers */
@@ -137,6 +138,30 @@ static void encode_vlc_codeword(PutBitContext* pb, unsigned int codebook, int va
     }
 }
 
+/*
+ * Estimate bits for a VLC codeword without writing
+ * Mirrors encode_vlc_codeword but returns bit count
+ */
+int prores_estimate_vlc_codeword(unsigned int codebook, int val)
+{
+    unsigned int rice_order, exp_order, switch_bits, switch_val;
+    int exponent;
+
+    switch_bits = (codebook & 3) + 1;
+    rice_order  = codebook >> 5;
+    exp_order   = (codebook >> 2) & 7;
+    switch_val  = switch_bits << rice_order;
+
+    if ((unsigned int)val >= switch_val) {
+        val -= switch_val - (1 << exp_order);
+        exponent = simple_log2(val);
+        return (exponent - exp_order + switch_bits) + (exponent + 1);
+    } else {
+        exponent = val >> rice_order;
+        return exponent + 1 + rice_order;
+    }
+}
+
 void prores_encode_vlc(PutBitContext* pb, int codebook, int value)
 {
     /* Convert signed to unsigned using zigzag: negative -> odd, positive -> even */
@@ -154,7 +179,7 @@ void prores_encode_dc(PutBitContext* pb, int codebook_idx, int diff)
     if (codebook_idx < 0) {
         cb = FIRST_DC_CB;
     } else {
-        cb = dc_codebook[codebook_idx < 7 ? codebook_idx : 6];
+        cb = prores_dc_codebook[codebook_idx < 7 ? codebook_idx : 6];
     }
 
     encode_vlc_codeword(pb, cb, uval);
@@ -164,7 +189,7 @@ void prores_encode_run(PutBitContext* pb, int run_cb, int run)
 {
     if (run_cb < 0) run_cb = 0;
     if (run_cb > 15) run_cb = 15;
-    encode_vlc_codeword(pb, run_to_cb[run_cb], run);
+    encode_vlc_codeword(pb, prores_run_to_cb[run_cb], run);
 }
 
 void prores_encode_level(PutBitContext* pb, int lev_cb, int level)
@@ -172,7 +197,7 @@ void prores_encode_level(PutBitContext* pb, int lev_cb, int level)
     if (lev_cb < 0) lev_cb = 0;
     if (lev_cb > 9) lev_cb = 9;
     /* Level is encoded as (abs_level - 1) */
-    encode_vlc_codeword(pb, lev_to_cb[lev_cb], level - 1);
+    encode_vlc_codeword(pb, prores_lev_to_cb[lev_cb], level - 1);
 }
 
 void prores_encode_ac(PutBitContext* pb, int codebook, const int16_t* coeffs)
