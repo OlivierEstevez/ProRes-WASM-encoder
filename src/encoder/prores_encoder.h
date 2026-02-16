@@ -168,6 +168,7 @@ void rgba_to_yuva444p10(
     ProResColorRange range
 );
 
+
 #ifdef __cplusplus
 }
 #endif

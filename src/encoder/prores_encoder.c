@@ -8,6 +8,7 @@
 #include "prores_vlc.h"
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 /* ProRes frame header magic */
 #define PRORES_FRAME_MAGIC  0x69637066  /* 'icpf' */
@@ -20,6 +21,9 @@
 #define MB_SIZE 16
 /* Maximum size for a single plane's encoded data in a slice */
 #define MAX_PLANE_DATA_SIZE 65536
+
+/* Maximum blocks per slice: 8 MBs x 4 luma blocks = 32 blocks per component */
+#define MAX_BLOCKS_PER_SLICE 32
 
 /* ProRes profile FourCC codes (big endian) */
 static const uint32_t profile_fourcc[6] = {
@@ -98,6 +102,33 @@ static const uint8_t quant_matrix_hq[64] = {
     4, 4, 4, 4, 5, 6, 7, 7,
 };
 
+/* Profile info table: quant ranges and bitrate targets per resolution tier
+ * From FFmpeg's proresenc_kostya.c (prores_profile_info) */
+static const struct {
+    int min_quant;
+    int max_quant;
+    int br_tab[4]; /* bits per MB by resolution tier */
+} prores_profile_info[6] = {
+    { 4, 8, {  300,  242,  220,  194 } },  /* Proxy */
+    { 1, 9, {  720,  560,  490,  440 } },  /* LT */
+    { 1, 6, { 1050,  808,  710,  632 } },  /* Standard */
+    { 1, 6, { 1566, 1216, 1070,  950 } },  /* HQ */
+    { 1, 6, { 2350, 1828, 1600, 1425 } },  /* 4444 */
+    { 1, 6, { 3525, 2742, 2400, 2137 } },  /* 4444 XQ */
+};
+
+/* Trellis search parameters for adaptive quantization */
+#define TRELLIS_WIDTH  16
+#define MAX_STORED_Q   16
+#define SCORE_LIMIT    (INT_MAX / 2)
+
+typedef struct {
+    int prev_node;
+    int quant;
+    int bits;
+    int score;
+} TrellisNode;
+
 /* ProRes progressive scan order (FFmpeg compatible) */
 static const uint8_t prores_scan[64] = {
      0,  1,  8,  9,  2,  3, 10, 11,
@@ -130,16 +161,32 @@ struct ProResEncoderContext {
     /* Quantization */
     uint8_t quant_matrix[64];        /* Luma quantization matrix */
     uint8_t chroma_quant_matrix[64]; /* Chroma quantization matrix */
-    int q_scale;             /* Quantization scale factor */
     int bit_depth;
     int sample_center;
+
+    /* Adaptive quantization */
+    int min_quant;
+    int max_quant;
+    int bits_per_mb;                            /* target bits per macroblock */
+    int16_t quants[MAX_STORED_Q][64];           /* pre-computed luma qmat * q */
+    int16_t quants_chroma[MAX_STORED_Q][64];    /* pre-computed chroma qmat * q */
+    int* slice_q;                               /* per-slice quant decisions */
+
+    /* Per-row DCT block storage (for trellis estimation then encoding) */
+    int16_t* row_luma_blocks;       /* [slices_per_row * MAX_BLOCKS_PER_SLICE * 64] */
+    int16_t* row_u_blocks;
+    int16_t* row_v_blocks;
+    int* row_luma_block_counts;     /* [slices_per_row] */
+    int* row_chroma_block_counts;   /* [slices_per_row] */
+
+    /* Trellis nodes */
+    TrellisNode* trellis;           /* [(slices_per_row + 1) * TRELLIS_WIDTH] */
 
     /* Working buffers */
     int16_t* y_plane;        /* Luma buffer */
     int16_t* u_plane;        /* Cb buffer */
     int16_t* v_plane;        /* Cr buffer */
     int16_t* a_plane;        /* Alpha buffer (4444 only) */
-    int16_t* dct_block;      /* DCT coefficient buffer */
 
     /* Output buffer */
     uint8_t* output_buf;
@@ -220,9 +267,6 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
     ctx->num_slices = ctx->slices_per_row * ctx->mb_height;
     ctx->slice_mb_count = ctx->slice_mb_width;  /* MBs per slice (may be less for last slice in row) */
 
-    /* Fixed quantization scale = 1 (best quality), matching FFmpeg's prores_ks default */
-    ctx->q_scale = 1;
-
     /* Always use 10-bit internally, matching FFmpeg (avctx->bits_per_raw_sample = 10).
      * This ensures DCT coefficients fit in int16_t (max DC = 32 * 1023 = 32736). */
     ctx->bit_depth = 10;
@@ -231,6 +275,49 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
     /* Copy quantization matrices */
     memcpy(ctx->quant_matrix, get_quant_matrix(config->profile), 64);
     memcpy(ctx->chroma_quant_matrix, get_chroma_quant_matrix(config->profile), 64);
+
+    /* Adaptive quantization setup */
+    ctx->min_quant = prores_profile_info[config->profile].min_quant;
+    ctx->max_quant = prores_profile_info[config->profile].max_quant;
+
+    /* Resolution tier selection (by total MB count) */
+    {
+        int total_mbs = ctx->mb_width * ctx->mb_height;
+        int tier;
+        if (total_mbs <= 1620)      tier = 0;  /* up to 720x576 */
+        else if (total_mbs <= 2700) tier = 1;  /* up to 960x720 */
+        else if (total_mbs <= 6075) tier = 2;  /* up to 1440x1080 */
+        else                        tier = 3;
+        ctx->bits_per_mb = prores_profile_info[config->profile].br_tab[tier];
+    }
+
+    /* Pre-compute quantization matrices for each possible q_scale */
+    {
+        int num_q = ctx->max_quant - ctx->min_quant + 1;
+        for (int qi = 0; qi < num_q && qi < MAX_STORED_Q; qi++) {
+            int q = ctx->min_quant + qi;
+            for (int i = 0; i < 64; i++) {
+                ctx->quants[qi][i] = (int16_t)(ctx->quant_matrix[i] * q);
+                ctx->quants_chroma[qi][i] = (int16_t)(ctx->chroma_quant_matrix[i] * q);
+            }
+        }
+    }
+
+    /* Allocate per-slice quant decisions */
+    ctx->slice_q = (int*)calloc(ctx->num_slices, sizeof(int));
+
+    /* Allocate per-row DCT block storage */
+    {
+        int row_blocks = ctx->slices_per_row * MAX_BLOCKS_PER_SLICE * 64;
+        ctx->row_luma_blocks = (int16_t*)malloc(row_blocks * sizeof(int16_t));
+        ctx->row_u_blocks = (int16_t*)malloc(row_blocks * sizeof(int16_t));
+        ctx->row_v_blocks = (int16_t*)malloc(row_blocks * sizeof(int16_t));
+        ctx->row_luma_block_counts = (int*)malloc(ctx->slices_per_row * sizeof(int));
+        ctx->row_chroma_block_counts = (int*)malloc(ctx->slices_per_row * sizeof(int));
+    }
+
+    /* Allocate trellis nodes */
+    ctx->trellis = (TrellisNode*)malloc((ctx->slices_per_row + 1) * TRELLIS_WIDTH * sizeof(TrellisNode));
 
     /* Allocate plane buffers (16-bit for 10-bit data), using padded sizes */
     plane_size = ctx->padded_width * ctx->padded_height * sizeof(int16_t);
@@ -246,8 +333,6 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
         ctx->u_plane = (int16_t*)malloc(chroma_size);
         ctx->v_plane = (int16_t*)malloc(chroma_size);
     }
-
-    ctx->dct_block = (int16_t*)malloc(64 * 4 * sizeof(int16_t));  /* 4 blocks per macroblock minimum */
 
     /* Output buffer - estimate based on bitrate */
     ctx->output_capacity = (size_t)(ctx->padded_width * ctx->padded_height * profile_bpp[config->profile] / 8);
@@ -265,8 +350,10 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
         ctx->alpha_pixel_buf = (uint16_t*)malloc(ctx->slice_mb_width * 256 * sizeof(uint16_t));
     }
 
-    if (!ctx->y_plane || !ctx->u_plane || !ctx->v_plane || !ctx->dct_block ||
-        !ctx->output_buf || !ctx->slice_luma_buf || !ctx->slice_u_buf || !ctx->slice_v_buf) {
+    if (!ctx->y_plane || !ctx->u_plane || !ctx->v_plane ||
+        !ctx->output_buf || !ctx->slice_luma_buf || !ctx->slice_u_buf || !ctx->slice_v_buf ||
+        !ctx->slice_q || !ctx->row_luma_blocks || !ctx->row_u_blocks || !ctx->row_v_blocks ||
+        !ctx->row_luma_block_counts || !ctx->row_chroma_block_counts || !ctx->trellis) {
         prores_encoder_destroy(ctx);
         return NULL;
     }
@@ -397,9 +484,6 @@ static void dct_block(const int16_t* src, int stride, int16_t* dst)
     }
 }
 
-/* Maximum blocks per slice: 8 MBs x 4 luma blocks = 32 blocks per component */
-#define MAX_BLOCKS_PER_SLICE 32
-
 /*
  * Encode DC coefficients for all blocks in a plane
  * ProRes encodes all DCs first, before any AC coefficients
@@ -473,6 +557,344 @@ static void encode_ac_coeffs_all(PutBitContext* pb, int16_t blocks[][64], int nu
     }
 
     (void)run;
+}
+
+/*
+ * Bit estimation functions for adaptive quantization
+ * These mirror the encoding functions but return bit counts + accumulate
+ * quantization error (|coeff| % q) for trellis optimization.
+ */
+
+/* Estimate DC encoding bits + accumulate quantization error */
+static int estimate_dcs(int *error, int16_t blocks[][64],
+                        int blocks_per_slice, int scale)
+{
+    int bits = 0;
+    int16_t *flat = &blocks[0][0];
+
+    if (scale < 1) scale = 1;
+
+    /* First DC */
+    int dc_raw = flat[0] - 0x4000;
+    int prev_dc = dc_raw / scale;
+    int abs_dc_raw = (dc_raw < 0) ? -dc_raw : dc_raw;
+    *error += abs_dc_raw % scale;
+
+    unsigned int uval = (prev_dc < 0) ? (unsigned int)(-prev_dc * 2 - 1) : (unsigned int)(prev_dc * 2);
+    bits += prores_estimate_vlc_codeword(PRORES_FIRST_DC_CB, uval);
+
+    int sign = 0;
+    int codebook_idx = 5;
+    flat += 64;
+
+    for (int b = 1; b < blocks_per_slice; b++, flat += 64) {
+        dc_raw = flat[0] - 0x4000;
+        int dc = dc_raw / scale;
+        abs_dc_raw = (dc_raw < 0) ? -dc_raw : dc_raw;
+        *error += abs_dc_raw % scale;
+
+        int delta = dc - prev_dc;
+        int new_sign = (delta < 0) ? -1 : 0;
+        delta = (delta ^ sign) - sign;
+
+        unsigned int code = (delta < 0) ? (unsigned int)(-delta * 2 - 1) : (unsigned int)(delta * 2);
+        uint8_t cb = prores_dc_codebook[codebook_idx < 7 ? codebook_idx : 6];
+        bits += prores_estimate_vlc_codeword(cb, code);
+
+        codebook_idx = (code < 7) ? (int)code : 6;
+        sign = new_sign;
+        prev_dc = dc;
+    }
+
+    return bits;
+}
+
+/* Estimate AC encoding bits + accumulate quantization error */
+static int estimate_acs(int *error, int16_t blocks[][64],
+                        int blocks_per_slice, const uint8_t *scan,
+                        const int16_t *qmat)
+{
+    int prev_run = 4;
+    int prev_level = 2;
+    int run = 0;
+    int bits = 0;
+    int max_coeffs = blocks_per_slice << 6;
+    int16_t *flat = &blocks[0][0];
+
+    for (int i = 1; i < 64; i++) {
+        int q = qmat[scan[i]];
+        if (q < 1) q = 1;
+        for (int idx = scan[i]; idx < max_coeffs; idx += 64) {
+            int coeff = flat[idx];
+            int level = coeff / q;
+            int abs_coeff = (coeff < 0) ? -coeff : coeff;
+            *error += abs_coeff % q;
+            if (level) {
+                int abs_level = (level < 0) ? -level : level;
+                int rcb = (prev_run < 16) ? prev_run : 15;
+                int lcb = (prev_level < 10) ? prev_level : 9;
+                bits += prores_estimate_vlc_codeword(prores_run_to_cb[rcb], run);
+                bits += prores_estimate_vlc_codeword(prores_lev_to_cb[lcb], abs_level - 1);
+                bits += 1;  /* sign bit */
+                prev_run = (run < 16) ? run : 15;
+                prev_level = (abs_level < 10) ? abs_level : 9;
+                run = 0;
+            } else {
+                run++;
+            }
+        }
+    }
+
+    return bits;
+}
+
+/* Estimate total bits for one plane of one slice at a given quant.
+ * Returns bits aligned to byte boundary (matching FFmpeg's FFALIGN(bits, 8)). */
+static int estimate_slice_plane(int *error, int16_t blocks[][64],
+                                int blocks_per_slice,
+                                const int16_t *qmat)
+{
+    int bits = 0;
+    int scale = qmat[0];
+    bits += estimate_dcs(error, blocks, blocks_per_slice, scale);
+    bits += estimate_acs(error, blocks, blocks_per_slice, prores_scan, qmat);
+    return (bits + 7) & ~7;  /* byte-align like FFmpeg */
+}
+
+/* DCT all blocks for one slice, storing results in output arrays.
+ * Separates DCT from encoding so blocks can be reused for estimation + encoding. */
+static void dct_slice_blocks(ProResEncoderContext* ctx,
+                              int slice_mb_x, int mb_y, int slice_width,
+                              int16_t luma_out[][64], int *luma_count,
+                              int16_t u_out[][64], int *u_count,
+                              int16_t v_out[][64], int *v_count)
+{
+    int is_444 = is_444_profile(ctx->config.profile);
+    int mb_x, block_x, block_y;
+
+    *luma_count = 0;
+    *u_count = 0;
+    *v_count = 0;
+
+    /* Luma blocks (row-major: TL, TR, BL, BR) */
+    for (mb_x = 0; mb_x < slice_width; mb_x++) {
+        int pixel_x = (slice_mb_x + mb_x) * MB_SIZE;
+        int pixel_y = mb_y * MB_SIZE;
+        for (block_y = 0; block_y < 2; block_y++) {
+            for (block_x = 0; block_x < 2; block_x++) {
+                int bx = pixel_x + block_x * 8;
+                int by = pixel_y + block_y * 8;
+                dct_block(ctx->y_plane + by * ctx->padded_width + bx,
+                          ctx->padded_width,
+                          luma_out[(*luma_count)++]);
+            }
+        }
+    }
+
+    /* U blocks */
+    for (mb_x = 0; mb_x < slice_width; mb_x++) {
+        int pixel_x = (slice_mb_x + mb_x) * MB_SIZE;
+        int pixel_y = mb_y * MB_SIZE;
+        if (is_444) {
+            /* 4444: column-major block order (TL, BL, TR, BR) */
+            for (block_x = 0; block_x < 2; block_x++) {
+                for (block_y = 0; block_y < 2; block_y++) {
+                    int bx = pixel_x + block_x * 8;
+                    int by = pixel_y + block_y * 8;
+                    dct_block(ctx->u_plane + by * ctx->padded_width + bx,
+                              ctx->padded_width,
+                              u_out[(*u_count)++]);
+                }
+            }
+        } else {
+            int chroma_width = ctx->padded_width / 2;
+            for (block_y = 0; block_y < 2; block_y++) {
+                int bx = pixel_x / 2;
+                int by = pixel_y + block_y * 8;
+                dct_block(ctx->u_plane + by * chroma_width + bx,
+                          chroma_width,
+                          u_out[(*u_count)++]);
+            }
+        }
+    }
+
+    /* V blocks (same structure as U) */
+    for (mb_x = 0; mb_x < slice_width; mb_x++) {
+        int pixel_x = (slice_mb_x + mb_x) * MB_SIZE;
+        int pixel_y = mb_y * MB_SIZE;
+        if (is_444) {
+            for (block_x = 0; block_x < 2; block_x++) {
+                for (block_y = 0; block_y < 2; block_y++) {
+                    int bx = pixel_x + block_x * 8;
+                    int by = pixel_y + block_y * 8;
+                    dct_block(ctx->v_plane + by * ctx->padded_width + bx,
+                              ctx->padded_width,
+                              v_out[(*v_count)++]);
+                }
+            }
+        } else {
+            int chroma_width = ctx->padded_width / 2;
+            for (block_y = 0; block_y < 2; block_y++) {
+                int bx = pixel_x / 2;
+                int by = pixel_y + block_y * 8;
+                dct_block(ctx->v_plane + by * chroma_width + bx,
+                          chroma_width,
+                          v_out[(*v_count)++]);
+            }
+        }
+    }
+}
+
+/* Viterbi trellis search across all slices in a MB row.
+ * Matches FFmpeg's find_slice_quant algorithm:
+ * - Tries q values from min_quant to max_quant
+ * - If max_quant doesn't fit, searches up to q=128 ("overquant")
+ * - Uses cumulative bit tracking across slices
+ * - Nodes indexed by q value (min_quant..max_quant+1, where +1 = overquant) */
+static void find_slice_quants(ProResEncoderContext *ctx, int mb_row)
+{
+    int slices = ctx->slices_per_row;
+    int is_444 = is_444_profile(ctx->config.profile);
+    int base_slice_idx = mb_row * slices;
+    int min_q = ctx->min_quant;
+    int max_q = ctx->max_quant;
+    int num_q = max_q - min_q + 2;  /* +1 for the overquant slot */
+
+    /* Access trellis nodes as [position][qi] where qi = q - min_q
+     * qi ranges from 0 to num_q-1, with num_q-1 being the overquant slot */
+    TrellisNode *nodes = ctx->trellis;
+    #define TNODE(pos, qi) nodes[(pos) * TRELLIS_WIDTH + (qi)]
+
+    /* Initialize position 0 (before first slice) */
+    for (int qi = 0; qi < num_q; qi++) {
+        TNODE(0, qi).score = 0;
+        TNODE(0, qi).bits = 0;
+        TNODE(0, qi).quant = min_q + qi;
+        TNODE(0, qi).prev_node = -1;
+    }
+
+    int mbs_so_far = 0;
+
+    /* Forward pass: for each slice */
+    for (int s = 0; s < slices; s++) {
+        int slice_mb_x = s * ctx->slice_mb_width;
+        int slice_width = ctx->slice_mb_width;
+        if (slice_mb_x + slice_width > ctx->mb_width)
+            slice_width = ctx->mb_width - slice_mb_x;
+        mbs_so_far += slice_width;
+
+        /* Cumulative bit budget (total bits allowed up through this slice) */
+        int bits_limit = ctx->bits_per_mb * mbs_so_far;
+
+        /* Get pointers to this slice's pre-computed DCT blocks */
+        int16_t (*luma)[64] = (int16_t (*)[64])(ctx->row_luma_blocks + s * MAX_BLOCKS_PER_SLICE * 64);
+        int luma_count = ctx->row_luma_block_counts[s];
+        int16_t (*u)[64] = (int16_t (*)[64])(ctx->row_u_blocks + s * MAX_BLOCKS_PER_SLICE * 64);
+        int16_t (*v)[64] = (int16_t (*)[64])(ctx->row_v_blocks + s * MAX_BLOCKS_PER_SLICE * 64);
+        int chroma_count = ctx->row_chroma_block_counts[s];
+
+        int hdr_bits = is_444 ? 64 : 48;
+
+        /* Per-q estimation arrays */
+        int slice_bits[TRELLIS_WIDTH];
+        int slice_score[TRELLIS_WIDTH];
+
+        /* Estimate bits+error for q in [min_q, max_q] */
+        for (int qi = 0; qi <= max_q - min_q; qi++) {
+            int error = 0;
+            int bits = 0;
+            bits += estimate_slice_plane(&error, luma, luma_count, ctx->quants[qi]);
+            bits += estimate_slice_plane(&error, u, chroma_count, ctx->quants_chroma[qi]);
+            bits += estimate_slice_plane(&error, v, chroma_count, ctx->quants_chroma[qi]);
+            bits += hdr_bits;
+            if (bits > 65000 * 8)
+                error = SCORE_LIMIT;
+            slice_bits[qi] = bits;
+            slice_score[qi] = error;
+        }
+
+        /* Overquant: if max_quant doesn't fit the per-slice budget, search higher */
+        int oq_idx = num_q - 1;  /* overquant slot index */
+        int per_slice_budget = ctx->bits_per_mb * slice_width;
+        int overquant;
+
+        if (slice_bits[max_q - min_q] <= per_slice_budget) {
+            /* Max quant fits — overquant = max_quant with slightly worse score */
+            slice_bits[oq_idx] = slice_bits[max_q - min_q];
+            slice_score[oq_idx] = slice_score[max_q - min_q] + 1;
+            overquant = max_q;
+        } else {
+            /* Search beyond max_quant up to q=128 */
+            int q, bits = 0, error = 0;
+            for (q = max_q + 1; q < 128; q++) {
+                error = 0;
+                bits = 0;
+                /* Compute qmat on the fly for q beyond pre-computed range */
+                int16_t qmat_luma[64], qmat_chroma[64];
+                for (int i = 0; i < 64; i++) {
+                    qmat_luma[i] = (int16_t)(ctx->quant_matrix[i] * q);
+                    qmat_chroma[i] = (int16_t)(ctx->chroma_quant_matrix[i] * q);
+                }
+                bits += estimate_slice_plane(&error, luma, luma_count, qmat_luma);
+                bits += estimate_slice_plane(&error, u, chroma_count, qmat_chroma);
+                bits += estimate_slice_plane(&error, v, chroma_count, qmat_chroma);
+                bits += hdr_bits;
+                if (bits <= per_slice_budget)
+                    break;
+            }
+            slice_bits[oq_idx] = bits;
+            slice_score[oq_idx] = error;
+            overquant = q;
+        }
+
+        /* Initialize next position nodes */
+        for (int qi = 0; qi < num_q; qi++) {
+            TNODE(s + 1, qi).prev_node = -1;
+            TNODE(s + 1, qi).quant = (qi < oq_idx) ? (min_q + qi) : overquant;
+            TNODE(s + 1, qi).score = SCORE_LIMIT;
+            TNODE(s + 1, qi).bits = 0;
+        }
+
+        /* Trellis forward pass: try all (prev_q, cur_q) pairs */
+        for (int pqi = 0; pqi < num_q; pqi++) {
+            for (int qi = 0; qi < num_q; qi++) {
+                int bits = TNODE(s, pqi).bits + slice_bits[qi];
+                int error = slice_score[qi];
+
+                if (bits > bits_limit)
+                    error = SCORE_LIMIT;
+
+                int new_score;
+                if (TNODE(s, pqi).score < SCORE_LIMIT && error < SCORE_LIMIT)
+                    new_score = TNODE(s, pqi).score + error;
+                else
+                    new_score = SCORE_LIMIT;
+
+                if (TNODE(s + 1, qi).prev_node == -1 ||
+                    TNODE(s + 1, qi).score >= new_score) {
+                    TNODE(s + 1, qi).bits = bits;
+                    TNODE(s + 1, qi).score = new_score;
+                    TNODE(s + 1, qi).prev_node = pqi;
+                }
+            }
+        }
+    }
+
+    /* Find best terminal node */
+    int best_qi = 0;
+    for (int qi = 1; qi < num_q; qi++) {
+        if (TNODE(slices, qi).score <= TNODE(slices, best_qi).score)
+            best_qi = qi;
+    }
+
+    /* Backtrack to populate slice_q[] */
+    int qi = best_qi;
+    for (int s = slices - 1; s >= 0; s--) {
+        ctx->slice_q[base_slice_idx + s] = TNODE(s + 1, qi).quant;
+        qi = TNODE(s + 1, qi).prev_node;
+    }
+
+    #undef TNODE
 }
 
 /*
@@ -582,166 +1004,70 @@ static int get_alpha_data(const int16_t* a_plane, int stride,
     return count;
 }
 
-/* Encode a single slice with proper slice header
+/* Encode a single slice from pre-computed DCT blocks with a given quant.
  * ProRes slice structure:
  *   422:  6-byte header (hdr_size, scale, luma_size, u_size) + Y + U + V
  *   4444: 8-byte header (hdr_size, scale, luma_size, u_size, v_size) + Y + U + V + Alpha
- *
- * We encode each plane to a temp buffer first to get sizes, then write header + data
  */
 static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
-                       int slice_mb_x, int slice_mb_y, int slice_width)
+                       int slice_mb_x, int slice_mb_y, int slice_width,
+                       int quant,
+                       int16_t luma_blocks[][64], int luma_block_count,
+                       int16_t u_blocks[][64], int chroma_block_count,
+                       int16_t v_blocks[][64], int v_block_count)
 {
-    int mb_x;
-    int block_x, block_y;
     int is_444 = is_444_profile(ctx->config.profile);
-    int mb_y = slice_mb_y;
-
-    /* Storage for all block coefficients */
-    int16_t luma_blocks[MAX_BLOCKS_PER_SLICE][64];
-    int16_t u_blocks[MAX_BLOCKS_PER_SLICE][64];
-    int16_t v_blocks[MAX_BLOCKS_PER_SLICE][64];
 
     /* Temporary buffers for encoded plane data (heap-backed to avoid WASM stack overflow) */
     uint8_t* luma_data = ctx->slice_luma_buf;
     uint8_t* u_data = ctx->slice_u_buf;
     uint8_t* v_data = ctx->slice_v_buf;
 
-    int luma_block_count = 0;
-    int chroma_block_count = 0;
-
-    /* First pass: DCT and quantize all luma blocks
-     * Block order: row-major (TL, TR, BL, BR) */
-    for (mb_x = 0; mb_x < slice_width; mb_x++) {
-        int pixel_x = (slice_mb_x + mb_x) * MB_SIZE;
-        int pixel_y = mb_y * MB_SIZE;
-
-        for (block_y = 0; block_y < 2; block_y++) {
-            for (block_x = 0; block_x < 2; block_x++) {
-                int bx = pixel_x + block_x * 8;
-                int by = pixel_y + block_y * 8;
-
-                dct_block(ctx->y_plane + by * ctx->padded_width + bx,
-                          ctx->padded_width,
-                          luma_blocks[luma_block_count]);
-                luma_block_count++;
-            }
-        }
-    }
-
     /* Encode luma to temp buffer */
     PutBitContext luma_pb;
     init_put_bits(&luma_pb, luma_data, ctx->slice_buf_capacity);
-    encode_dc_coeffs(&luma_pb, luma_blocks, luma_block_count, ctx->quant_matrix, ctx->q_scale);
+    encode_dc_coeffs(&luma_pb, luma_blocks, luma_block_count, ctx->quant_matrix, quant);
     encode_ac_coeffs_all(&luma_pb, luma_blocks, luma_block_count,
-                         prores_scan, ctx->quant_matrix, ctx->q_scale);
+                         prores_scan, ctx->quant_matrix, quant);
 
-    /* Byte-align luma */
     int luma_bits = put_bits_count(&luma_pb);
     if (luma_bits % 8) put_bits(&luma_pb, 8 - (luma_bits % 8), 0);
     flush_put_bits(&luma_pb);
     int luma_size = (put_bits_count(&luma_pb) + 7) / 8;
     if ((size_t)luma_size > ctx->slice_buf_capacity) return -1;
 
-    /* DCT and quantize chroma U blocks */
-    for (mb_x = 0; mb_x < slice_width; mb_x++) {
-        int pixel_x = (slice_mb_x + mb_x) * MB_SIZE;
-        int pixel_y = mb_y * MB_SIZE;
-
-        if (is_444) {
-            /* 4444: column-major block order (TL, BL, TR, BR) */
-            for (block_x = 0; block_x < 2; block_x++) {
-                for (block_y = 0; block_y < 2; block_y++) {
-                    int bx = pixel_x + block_x * 8;
-                    int by = pixel_y + block_y * 8;
-
-                    dct_block(ctx->u_plane + by * ctx->padded_width + bx,
-                              ctx->padded_width,
-                              u_blocks[chroma_block_count]);
-                    chroma_block_count++;
-                }
-            }
-        } else {
-            int chroma_width = ctx->padded_width / 2;
-            for (block_y = 0; block_y < 2; block_y++) {
-                int bx = pixel_x / 2;
-                int by = pixel_y + block_y * 8;
-
-                dct_block(ctx->u_plane + by * chroma_width + bx,
-                          chroma_width,
-                          u_blocks[chroma_block_count]);
-                chroma_block_count++;
-            }
-        }
-    }
-
     /* Encode chroma U to temp buffer */
     PutBitContext u_pb;
     init_put_bits(&u_pb, u_data, ctx->slice_buf_capacity);
-    encode_dc_coeffs(&u_pb, u_blocks, chroma_block_count, ctx->chroma_quant_matrix, ctx->q_scale);
+    encode_dc_coeffs(&u_pb, u_blocks, chroma_block_count, ctx->chroma_quant_matrix, quant);
     encode_ac_coeffs_all(&u_pb, u_blocks, chroma_block_count,
-                         prores_scan, ctx->chroma_quant_matrix, ctx->q_scale);
+                         prores_scan, ctx->chroma_quant_matrix, quant);
 
-    /* Byte-align chroma U */
     int u_bits = put_bits_count(&u_pb);
     if (u_bits % 8) put_bits(&u_pb, 8 - (u_bits % 8), 0);
     flush_put_bits(&u_pb);
     int u_size = (put_bits_count(&u_pb) + 7) / 8;
     if ((size_t)u_size > ctx->slice_buf_capacity) return -1;
 
-    /* DCT and quantize chroma V blocks */
-    int v_block_count = 0;
-    for (mb_x = 0; mb_x < slice_width; mb_x++) {
-        int pixel_x = (slice_mb_x + mb_x) * MB_SIZE;
-        int pixel_y = mb_y * MB_SIZE;
-
-        if (is_444) {
-            /* 4444: column-major block order (TL, BL, TR, BR) */
-            for (block_x = 0; block_x < 2; block_x++) {
-                for (block_y = 0; block_y < 2; block_y++) {
-                    int bx = pixel_x + block_x * 8;
-                    int by = pixel_y + block_y * 8;
-
-                    dct_block(ctx->v_plane + by * ctx->padded_width + bx,
-                              ctx->padded_width,
-                              v_blocks[v_block_count]);
-                    v_block_count++;
-                }
-            }
-        } else {
-            int chroma_width = ctx->padded_width / 2;
-            for (block_y = 0; block_y < 2; block_y++) {
-                int bx = pixel_x / 2;
-                int by = pixel_y + block_y * 8;
-
-                dct_block(ctx->v_plane + by * chroma_width + bx,
-                          chroma_width,
-                          v_blocks[v_block_count]);
-                v_block_count++;
-            }
-        }
-    }
-
     /* Encode chroma V to temp buffer */
     PutBitContext v_pb;
     init_put_bits(&v_pb, v_data, ctx->slice_buf_capacity);
-    encode_dc_coeffs(&v_pb, v_blocks, v_block_count, ctx->chroma_quant_matrix, ctx->q_scale);
+    encode_dc_coeffs(&v_pb, v_blocks, v_block_count, ctx->chroma_quant_matrix, quant);
     encode_ac_coeffs_all(&v_pb, v_blocks, v_block_count,
-                         prores_scan, ctx->chroma_quant_matrix, ctx->q_scale);
+                         prores_scan, ctx->chroma_quant_matrix, quant);
 
-    /* Byte-align chroma V */
     int v_bits = put_bits_count(&v_pb);
     if (v_bits % 8) put_bits(&v_pb, 8 - (v_bits % 8), 0);
     flush_put_bits(&v_pb);
     int v_size = (put_bits_count(&v_pb) + 7) / 8;
     if ((size_t)v_size > ctx->slice_buf_capacity) return -1;
 
-    /* Encode alpha for 4444 profiles */
+    /* Encode alpha for 4444 profiles (pixel-level, not DCT — doesn't depend on quant) */
     int alpha_size = 0;
     if (is_444 && ctx->a_plane) {
         int slice_pixel_w = slice_width * MB_SIZE;
         int pixel_x = slice_mb_x * MB_SIZE;
-        int pixel_y = mb_y * MB_SIZE;
+        int pixel_y = slice_mb_y * MB_SIZE;
 
         int num_alpha_pixels = get_alpha_data(ctx->a_plane, ctx->padded_width,
                                               pixel_x, pixel_y,
@@ -752,7 +1078,6 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
         init_put_bits(&alpha_pb, ctx->slice_alpha_buf, MAX_PLANE_DATA_SIZE);
         encode_alpha_plane(&alpha_pb, ctx->alpha_pixel_buf, num_alpha_pixels, 16);
 
-        /* Byte-align alpha */
         int alpha_bits = put_bits_count(&alpha_pb);
         if (alpha_bits % 8) put_bits(&alpha_pb, 8 - (alpha_bits % 8), 0);
         flush_put_bits(&alpha_pb);
@@ -761,36 +1086,25 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
 
     /* Write slice header with known sizes */
     if (is_444 && ctx->a_plane) {
-        /* 8-byte header for 4444 with alpha: adds v_data_size so decoder can find alpha */
-        put_bits(pb, 8, 64);  /* slice_hdr_size = 64 bits = 8 bytes */
-        put_bits(pb, 8, ctx->q_scale);  /* scale_factor */
-        put_bits(pb, 16, luma_size);    /* luma_data_size */
-        put_bits(pb, 16, u_size);       /* u_data_size */
-        put_bits(pb, 16, v_size);       /* v_data_size */
+        put_bits(pb, 8, 64);       /* slice_hdr_size = 64 bits = 8 bytes */
+        put_bits(pb, 8, quant);    /* scale_factor */
+        put_bits(pb, 16, luma_size);
+        put_bits(pb, 16, u_size);
+        put_bits(pb, 16, v_size);
     } else {
-        /* 6-byte header for 422 profiles */
-        put_bits(pb, 8, 48);  /* slice_hdr_size = 48 bits = 6 bytes */
-        put_bits(pb, 8, ctx->q_scale);  /* scale_factor */
-        put_bits(pb, 16, luma_size);    /* luma_data_size */
-        put_bits(pb, 16, u_size);       /* u_data_size */
+        put_bits(pb, 8, 48);       /* slice_hdr_size = 48 bits = 6 bytes */
+        put_bits(pb, 8, quant);    /* scale_factor */
+        put_bits(pb, 16, luma_size);
+        put_bits(pb, 16, u_size);
     }
 
     /* Write plane data byte by byte */
-    for (int i = 0; i < luma_size; i++) {
-        put_bits(pb, 8, luma_data[i]);
-    }
-    for (int i = 0; i < u_size; i++) {
-        put_bits(pb, 8, u_data[i]);
-    }
-    for (int i = 0; i < v_size; i++) {
-        put_bits(pb, 8, v_data[i]);
-    }
+    for (int i = 0; i < luma_size; i++) put_bits(pb, 8, luma_data[i]);
+    for (int i = 0; i < u_size; i++) put_bits(pb, 8, u_data[i]);
+    for (int i = 0; i < v_size; i++) put_bits(pb, 8, v_data[i]);
 
-    /* Write alpha data for 4444 */
     if (is_444 && ctx->a_plane && alpha_size > 0) {
-        for (int i = 0; i < alpha_size; i++) {
-            put_bits(pb, 8, ctx->slice_alpha_buf[i]);
-        }
+        for (int i = 0; i < alpha_size; i++) put_bits(pb, 8, ctx->slice_alpha_buf[i]);
     }
 
     return 0;
@@ -918,23 +1232,54 @@ int prores_encoder_encode_frame(
     int data_start = frame_hdr_size + pic_hdr_size;
     init_put_bits(&pb, ctx->output_buf + data_start, ctx->output_capacity - data_start);
 
-    /* Encode slices and track their sizes
-     * Slices are organized as: for each MB row, encode slices_per_row slices */
+    /* Encode slices with adaptive quantization: two-pass per MB row.
+     * Pass 1: DCT all blocks for every slice in this row
+     * Pass 2: Trellis search to find optimal per-slice quant
+     * Pass 3: Encode each slice using stored DCT blocks + chosen quant */
     int* slice_sizes = (int*)malloc(ctx->num_slices * sizeof(int));
     int slice_idx = 0;
 
     for (slice_y = 0; slice_y < ctx->mb_height; slice_y++) {
-        for (int slice_in_row = 0; slice_in_row < ctx->slices_per_row; slice_in_row++) {
-            int slice_mb_x = slice_in_row * ctx->slice_mb_width;
+        /* Pass 1: DCT all blocks for this MB row */
+        for (int s = 0; s < ctx->slices_per_row; s++) {
+            int slice_mb_x = s * ctx->slice_mb_width;
             int slice_width = ctx->slice_mb_width;
-
-            /* Handle last slice in row which may be narrower */
-            if (slice_mb_x + slice_width > ctx->mb_width) {
+            if (slice_mb_x + slice_width > ctx->mb_width)
                 slice_width = ctx->mb_width - slice_mb_x;
-            }
+
+            int16_t (*luma)[64] = (int16_t (*)[64])(ctx->row_luma_blocks + s * MAX_BLOCKS_PER_SLICE * 64);
+            int16_t (*u)[64] = (int16_t (*)[64])(ctx->row_u_blocks + s * MAX_BLOCKS_PER_SLICE * 64);
+            int16_t (*v)[64] = (int16_t (*)[64])(ctx->row_v_blocks + s * MAX_BLOCKS_PER_SLICE * 64);
+
+            /* U and V always have the same block count; use a local for V
+             * to avoid sharing the same pointer (which would corrupt the count) */
+            int v_count_tmp;
+            dct_slice_blocks(ctx, slice_mb_x, slice_y, slice_width,
+                            luma, &ctx->row_luma_block_counts[s],
+                            u, &ctx->row_chroma_block_counts[s],
+                            v, &v_count_tmp);
+        }
+
+        /* Pass 2: Trellis search for optimal per-slice quant values */
+        find_slice_quants(ctx, slice_y);
+
+        /* Pass 3: Encode each slice using stored blocks + chosen quant */
+        for (int s = 0; s < ctx->slices_per_row; s++) {
+            int slice_mb_x = s * ctx->slice_mb_width;
+            int slice_width = ctx->slice_mb_width;
+            if (slice_mb_x + slice_width > ctx->mb_width)
+                slice_width = ctx->mb_width - slice_mb_x;
+
+            int16_t (*luma)[64] = (int16_t (*)[64])(ctx->row_luma_blocks + s * MAX_BLOCKS_PER_SLICE * 64);
+            int16_t (*u)[64] = (int16_t (*)[64])(ctx->row_u_blocks + s * MAX_BLOCKS_PER_SLICE * 64);
+            int16_t (*v)[64] = (int16_t (*)[64])(ctx->row_v_blocks + s * MAX_BLOCKS_PER_SLICE * 64);
 
             int start_offset = put_bits_count(&pb) / 8;
-            encode_slice(ctx, &pb, slice_mb_x, slice_y, slice_width);
+            encode_slice(ctx, &pb, slice_mb_x, slice_y, slice_width,
+                        ctx->slice_q[slice_idx],
+                        luma, ctx->row_luma_block_counts[s],
+                        u, ctx->row_chroma_block_counts[s],
+                        v, ctx->row_chroma_block_counts[s]);
             int end_offset = put_bits_count(&pb) / 8;
             slice_sizes[slice_idx++] = end_offset - start_offset;
         }
@@ -1005,13 +1350,19 @@ void prores_encoder_destroy(ProResEncoderContext* ctx)
     free(ctx->u_plane);
     free(ctx->v_plane);
     free(ctx->a_plane);
-    free(ctx->dct_block);
     free(ctx->output_buf);
     free(ctx->slice_luma_buf);
     free(ctx->slice_u_buf);
     free(ctx->slice_v_buf);
     free(ctx->slice_alpha_buf);
     free(ctx->alpha_pixel_buf);
+    free(ctx->slice_q);
+    free(ctx->row_luma_blocks);
+    free(ctx->row_u_blocks);
+    free(ctx->row_v_blocks);
+    free(ctx->row_luma_block_counts);
+    free(ctx->row_chroma_block_counts);
+    free(ctx->trellis);
     free(ctx);
 }
 
@@ -1197,3 +1548,4 @@ void rgba_to_yuva444p10(const uint8_t* rgba, uint16_t* yuva, int width, int heig
         }
     }
 }
+

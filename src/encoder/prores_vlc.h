@@ -54,6 +54,22 @@ size_t put_bytes_count(const PutBitContext* pb);
 size_t put_bits_count(const PutBitContext* pb);
 
 /*
+ * ProRes-specific: Estimate bits for a VLC codeword (without writing)
+ * Mirrors encode_vlc_codeword but returns bit count
+ *
+ * @param codebook Codebook byte
+ * @param val      Unsigned value to estimate
+ * @return         Number of bits required
+ */
+int prores_estimate_vlc_codeword(unsigned int codebook, int val);
+
+/* Exposed codebook tables for bit estimation */
+extern const uint8_t prores_run_to_cb[16];
+extern const uint8_t prores_lev_to_cb[10];
+extern const uint8_t prores_dc_codebook[7];
+#define PRORES_FIRST_DC_CB 0xB8
+
+/*
  * ProRes-specific: Encode a single coefficient using Rice coding
  *
  * @param pb       Bitstream context

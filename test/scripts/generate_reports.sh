@@ -70,7 +70,7 @@ while IFS='|' read -r NAME DIR WIDTH HEIGHT FPS_NUM FPS_DEN NUM_FRAMES HAS_ALPHA
 
     # Which encoders are present?
     ENCODERS=()
-    for ENC in native ffmpeg wasm; do
+    for ENC in native ffmpeg-default ffmpeg-max-quality wasm; do
         if python3 -c "
 import json
 with open('$METRICS') as f:
@@ -210,8 +210,8 @@ EOF
 
 ## HQ Profile Overview (across sequences)
 
-| Sequence | Native Size (MB) | FFmpeg Size (MB) | Native PSNR | FFmpeg PSNR | Size Ratio |
-|----------|------------------|------------------|-------------|-------------|------------|
+| Sequence | Native Size (MB) | FFmpeg Max Quality Size (MB) | Native PSNR | FFmpeg Max Quality PSNR | Size Ratio |
+|----------|------------------|------------------------------|-------------|-------------------------|------------|
 EOF
 
     for SEQ in "${SEQUENCES[@]}"; do
@@ -224,7 +224,7 @@ EOF
 import json
 with open('$METRICS') as f:
     d = json.load(f)
-print('yes' if 'hq' in d.get('results',{}).get('native',{}) or 'hq' in d.get('results',{}).get('ffmpeg',{}) else 'no')
+print('yes' if 'hq' in d.get('results',{}).get('native',{}) or 'hq' in d.get('results',{}).get('ffmpeg-max-quality',{}) else 'no')
 " 2>/dev/null)
 
         if [[ "$HAS_HQ" != "yes" ]]; then
@@ -237,7 +237,7 @@ with open('$METRICS') as f:
     d = json.load(f)
 r = d.get('results', {})
 n = r.get('native', {}).get('$PROF', {})
-f_data = r.get('ffmpeg', {}).get('$PROF', {})
+f_data = r.get('ffmpeg-max-quality', {}).get('$PROF', {})
 ns = n.get('size_bytes', 0)
 fs = f_data.get('size_bytes', 0)
 np = n.get('psnr_avg', 'N/A')
