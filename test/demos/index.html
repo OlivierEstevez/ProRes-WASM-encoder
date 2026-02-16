@@ -1,0 +1,1419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ProRes WASM — Multi-Renderer Demo</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap');
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+      background: #0a0a0a;
+      color: #f2f2f2;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Tab bar ── */
+    .tab-bar {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      border-bottom: 1px solid #1f1f1f;
+      background: #0a0a0a;
+      padding: 0 16px;
+      flex-shrink: 0;
+    }
+    .tab-bar .tabs {
+      display: flex;
+      gap: 0;
+      flex: 1;
+    }
+    .tab-btn {
+      border-radius: 0px;
+      padding: 12px 20px;
+      border: none;
+      background: transparent;
+      color: #6a6a6a;
+      font-family: 'Space Grotesk', system-ui, sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .tab-btn:hover { color: #b0b0b0; }
+    .tab-btn.active {
+      color: #f2f2f2;
+      border-bottom-color: #f2f2f2;
+    }
+    .tab-bar .title {
+      text-align: right;
+      padding-right: 4px;
+    }
+    .tab-bar .title h1 {
+      font-size: 14px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #f2f2f2;
+      margin: 0;
+    }
+    .tab-bar .title p {
+      font-size: 10px;
+      color: #6a6a6a;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin: 0;
+    }
+
+    /* ── Central area ── */
+    .main-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+    }
+    .canvas-area {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 0;
+      padding: 16px;
+    }
+    #rendererContainer {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      max-width: 100%;
+      max-height: 100%;
+    }
+    #rendererContainer canvas {
+      max-width: 100%;
+      max-height: 100%;
+      border-radius: 8px;
+      border: 1px solid #222;
+      background: #000;
+      display: block;
+    }
+    #rendererContainer.alpha-bg canvas {
+      background-image:
+        linear-gradient(45deg, #1a1a1a 25%, transparent 25%),
+        linear-gradient(-45deg, #1a1a1a 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #1a1a1a 75%),
+        linear-gradient(-45deg, transparent 75%, #1a1a1a 75%);
+      background-size: 16px 16px;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+      background-color: #2a2a2a;
+    }
+    .unsupported-msg {
+      color: #6a6a6a;
+      font-size: 14px;
+      text-align: center;
+      padding: 40px;
+    }
+
+    /* ── Log panel ── */
+    .log-panel {
+      height: 100px;
+      min-height: 60px;
+      border-top: 1px solid #1f1f1f;
+      background: rgba(10, 10, 10, 0.95);
+      overflow-y: auto;
+      padding: 8px 12px;
+      font-family: 'Space Mono', monospace;
+      font-size: 10px;
+      flex-shrink: 0;
+    }
+    .log-entry { margin-bottom: 3px; color: #7a7a7a; }
+    .log-entry.info { color: #b3b3b3; }
+    .log-entry.success { color: #f2f2f2; }
+    .log-entry.error { color: #ff6b6b; }
+
+    /* ── Bottom controls ── */
+    .settings-bar {
+      border-top: 1px solid #1f1f1f;
+      background: #0a0a0a;
+      padding: 12px 16px;
+      flex-shrink: 0;
+    }
+    .settings-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .control-group {
+      background: #0f0f0f;
+      border: 1px solid #1f1f1f;
+      padding: 8px 10px;
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .control-group label {
+      color: #6a6a6a;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .control-group select,
+    .control-group input[type="number"] {
+      padding: 6px 8px;
+      border: 1px solid #2a2a2a;
+      border-radius: 4px;
+      background: #0a0a0a;
+      color: #f2f2f2;
+      font-size: 11px;
+      font-family: 'Space Mono', monospace;
+    }
+    .control-group.alpha-group {
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+    }
+    .control-group.alpha-group label {
+      margin: 0;
+    }
+    .control-group.alpha-group input[type="checkbox"] {
+      width: 14px;
+      height: 14px;
+      accent-color: #f2f2f2;
+    }
+
+    button {
+      padding: 8px 16px;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: #0f0f0f;
+      color: #f2f2f2;
+      font-family: 'Space Grotesk', system-ui, sans-serif;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary {
+      background: #f2f2f2;
+      color: #0a0a0a;
+      border-color: #f2f2f2;
+    }
+    .btn-primary:hover:not(:disabled) { background: #dcdcdc; }
+    button:not(.btn-primary):hover:not(:disabled) { background: #1a1a1a; }
+
+    .progress {
+      height: 2px;
+      background: #1a1a1a;
+      border-radius: 2px;
+      overflow: hidden;
+      flex: 1;
+      min-width: 80px;
+    }
+    .progress-bar {
+      height: 100%;
+      background: #f2f2f2;
+      width: 0%;
+      transition: width 0.1s;
+    }
+    .status-text {
+      font-size: 10px;
+      color: #6a6a6a;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="canvas2d">Canvas 2D</button>
+      <button class="tab-btn" data-tab="webgl">WebGL</button>
+      <button class="tab-btn" data-tab="threejs">Three.js</button>
+      <button class="tab-btn" data-tab="p5js">P5.js</button>
+      <button class="tab-btn" data-tab="webgpu">WebGPU</button>
+    </div>
+    <div class="title">
+      <h1>ProRes WASM</h1>
+      <p>Multi-Renderer Demo</p>
+    </div>
+  </div>
+
+  <!-- Main area -->
+  <div class="main-area">
+    <div class="canvas-area">
+      <div id="rendererContainer"></div>
+    </div>
+  </div>
+
+  <!-- Log panel -->
+  <div class="log-panel" id="logPanel"></div>
+
+  <!-- Bottom controls -->
+  <div class="settings-bar">
+    <div class="settings-row">
+      <div class="control-group">
+        <label>Resolution</label>
+        <select id="resolution">
+          <option value="640x480" selected>640x480</option>
+          <option value="1280x720">1280x720</option>
+          <option value="1920x1080">1920x1080</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label>FPS</label>
+        <select id="fps">
+          <option value="24">24</option>
+          <option value="25">25</option>
+          <option value="30" selected>30</option>
+          <option value="60">60</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label>Duration (s)</label>
+        <input type="number" id="duration" value="2" min="1" max="10" step="1">
+      </div>
+      <div class="control-group">
+        <label>Profile</label>
+        <select id="profile">
+          <option value="0">422 Proxy</option>
+          <option value="1">422 LT</option>
+          <option value="2">422</option>
+          <option value="3" selected>422 HQ</option>
+          <option value="4">4444</option>
+          <option value="5">4444 XQ</option>
+        </select>
+      </div>
+      <div class="control-group alpha-group">
+        <input type="checkbox" id="alphaToggle">
+        <label for="alphaToggle">Alpha</label>
+      </div>
+      <button id="recordBtn" class="btn-primary">Record</button>
+      <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+      <span class="status-text" id="statusText">Ready</span>
+    </div>
+  </div>
+
+  <!-- CDN deps -->
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js" } }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+
+    // ───────────────────────────────────────────────
+    //  Encoder loader
+    // ───────────────────────────────────────────────
+    let createProResEncoder = null;
+    let encoderLoadError = null;
+
+    (async () => {
+      try {
+        const url = new URL('../../dist/prores-encoder.esm.js', import.meta.url);
+        const mod = await import(url.href);
+        createProResEncoder = mod.default;
+        log('Encoder module loaded', 'success');
+      } catch (err) {
+        encoderLoadError = err;
+        log('Failed to load encoder module — serve from repo root', 'error');
+      }
+    })();
+
+    // ───────────────────────────────────────────────
+    //  Logging helpers
+    // ───────────────────────────────────────────────
+    const logPanel = document.getElementById('logPanel');
+
+    function log(msg, type = '') {
+      const el = document.createElement('div');
+      el.className = `log-entry ${type}`;
+      const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+      el.textContent = `[${ts}] ${msg}`;
+      logPanel.appendChild(el);
+      logPanel.scrollTop = logPanel.scrollHeight;
+    }
+
+    function setStatus(text) {
+      document.getElementById('statusText').textContent = text;
+    }
+
+    function setProgress(pct) {
+      document.getElementById('progressBar').style.width = `${pct}%`;
+    }
+
+    // ───────────────────────────────────────────────
+    //  Matrix math (4x4 column-major Float32Array)
+    // ───────────────────────────────────────────────
+    function mat4Create() { const m = new Float32Array(16); m[0]=m[5]=m[10]=m[15]=1; return m; }
+
+    function mat4Perspective(fovY, aspect, near, far) {
+      const f = 1 / Math.tan(fovY / 2);
+      const nf = 1 / (near - far);
+      const m = new Float32Array(16);
+      m[0] = f / aspect;
+      m[5] = f;
+      m[10] = (far + near) * nf;
+      m[11] = -1;
+      m[14] = 2 * far * near * nf;
+      return m;
+    }
+
+    function mat4LookAt(eye, center, up) {
+      const zx = eye[0]-center[0], zy = eye[1]-center[1], zz = eye[2]-center[2];
+      let len = 1 / Math.hypot(zx, zy, zz);
+      const fz = [zx*len, zy*len, zz*len];
+      const sx = up[1]*fz[2] - up[2]*fz[1];
+      const sy = up[2]*fz[0] - up[0]*fz[2];
+      const sz = up[0]*fz[1] - up[1]*fz[0];
+      len = 1 / Math.hypot(sx, sy, sz);
+      const fs = [sx*len, sy*len, sz*len];
+      const ux = fz[1]*fs[2] - fz[2]*fs[1];
+      const uy = fz[2]*fs[0] - fz[0]*fs[2];
+      const uz = fz[0]*fs[1] - fz[1]*fs[0];
+      const m = new Float32Array(16);
+      m[0]=fs[0]; m[1]=ux;    m[2]=fz[0];  m[3]=0;
+      m[4]=fs[1]; m[5]=uy;    m[6]=fz[1];  m[7]=0;
+      m[8]=fs[2]; m[9]=uz;    m[10]=fz[2]; m[11]=0;
+      m[12]=-(fs[0]*eye[0]+fs[1]*eye[1]+fs[2]*eye[2]);
+      m[13]=-(ux*eye[0]+uy*eye[1]+uz*eye[2]);
+      m[14]=-(fz[0]*eye[0]+fz[1]*eye[1]+fz[2]*eye[2]);
+      m[15]=1;
+      return m;
+    }
+
+    function mat4Multiply(a, b) {
+      const o = new Float32Array(16);
+      for (let i = 0; i < 4; i++)
+        for (let j = 0; j < 4; j++) {
+          let s = 0;
+          for (let k = 0; k < 4; k++) s += a[i + k*4] * b[k + j*4];
+          o[i + j*4] = s;
+        }
+      return o;
+    }
+
+    function mat4RotateX(rad) {
+      const c = Math.cos(rad), s = Math.sin(rad);
+      const m = mat4Create();
+      m[5]=c; m[6]=s; m[9]=-s; m[10]=c;
+      return m;
+    }
+
+    function mat4RotateY(rad) {
+      const c = Math.cos(rad), s = Math.sin(rad);
+      const m = mat4Create();
+      m[0]=c; m[2]=-s; m[8]=s; m[10]=c;
+      return m;
+    }
+
+    function transformPoint(m, p) {
+      const w = m[3]*p[0] + m[7]*p[1] + m[11]*p[2] + m[15];
+      return [
+        (m[0]*p[0] + m[4]*p[1] + m[8]*p[2]  + m[12]) / w,
+        (m[1]*p[0] + m[5]*p[1] + m[9]*p[2]  + m[13]) / w,
+        (m[2]*p[0] + m[6]*p[1] + m[10]*p[2] + m[14]) / w,
+      ];
+    }
+
+    // ───────────────────────────────────────────────
+    //  Cube geometry
+    // ───────────────────────────────────────────────
+    const CUBE_VERTS = [
+      [-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],  // back
+      [-1,-1, 1],[1,-1, 1],[1,1, 1],[-1,1, 1],  // front
+    ];
+
+    // 6 faces, each 4 vertex indices (CCW from outside)
+    const CUBE_FACES = [
+      [0,1,2,3], // back   (z=-1)
+      [5,4,7,6], // front  (z=+1)
+      [4,0,3,7], // left   (x=-1)
+      [1,5,6,2], // right  (x=+1)
+      [4,5,1,0], // bottom (y=-1)
+      [3,2,6,7], // top    (y=+1)
+    ];
+
+    const FACE_COLORS = [
+      [1, 0, 0],    // red
+      [0, 1, 0],    // green
+      [0, 0, 1],    // blue
+      [1, 1, 0],    // yellow
+      [1, 0, 1],    // magenta
+      [0, 1, 1],    // cyan
+    ];
+
+    // Build triangle data for WebGL / Three.js / WebGPU
+    // 6 faces * 2 triangles * 3 verts = 36 verts
+    function buildCubeTriangles() {
+      const positions = [];
+      const colors = [];
+      for (let f = 0; f < 6; f++) {
+        const idx = CUBE_FACES[f];
+        const c = FACE_COLORS[f];
+        // Two triangles: 0-1-2, 0-2-3
+        for (const tri of [[0,1,2],[0,2,3]]) {
+          for (const vi of tri) {
+            const v = CUBE_VERTS[idx[vi]];
+            positions.push(v[0], v[1], v[2]);
+            colors.push(c[0], c[1], c[2]);
+          }
+        }
+      }
+      return {
+        positions: new Float32Array(positions),
+        colors: new Float32Array(colors),
+      };
+    }
+
+    function getMVP(t, aspect) {
+      const proj = mat4Perspective(Math.PI / 4, aspect, 0.1, 100);
+      const view = mat4LookAt([0, 0, 4], [0, 0, 0], [0, 1, 0]);
+      const rotY = mat4RotateY(t * Math.PI * 2);
+      const rotX = mat4RotateX(Math.sin(t * Math.PI * 2) * 0.4);
+      const model = mat4Multiply(rotY, rotX);
+      return mat4Multiply(proj, mat4Multiply(view, model));
+    }
+
+    // ───────────────────────────────────────────────
+    //  State
+    // ───────────────────────────────────────────────
+    let activeTab = 'canvas2d';
+    let currentRenderer = null;
+    let animFrameId = null;
+    let alphaEnabled = false;
+    let isRecording = false;
+    let prevProfile = '3';
+    let previewStartTime = 0;
+
+    const container = document.getElementById('rendererContainer');
+
+    function getWidth()  { return parseInt(document.getElementById('resolution').value.split('x')[0]); }
+    function getHeight() { return parseInt(document.getElementById('resolution').value.split('x')[1]); }
+
+    // ───────────────────────────────────────────────
+    //  Renderer: Canvas 2D
+    // ───────────────────────────────────────────────
+    const Canvas2DRenderer = {
+      canvas: null,
+      ctx: null,
+
+      init(w, h, alpha) {
+        this.canvas = document.createElement('canvas');
+        this.canvas.width = w;
+        this.canvas.height = h;
+        container.appendChild(this.canvas);
+        this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+      },
+
+      render(t) {
+        const { ctx, canvas } = this;
+        const w = canvas.width, h = canvas.height;
+
+        if (alphaEnabled) {
+          ctx.clearRect(0, 0, w, h);
+        } else {
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, w, h);
+        }
+
+        const aspect = w / h;
+        const mvp = getMVP(t, aspect);
+
+        // Project all verts
+        const projected = CUBE_VERTS.map(v => {
+          const p = transformPoint(mvp, v);
+          return [(p[0] * 0.5 + 0.5) * w, (0.5 - p[1] * 0.5) * h, p[2]];
+        });
+
+        // Sort faces back-to-front by average z
+        const faceOrder = CUBE_FACES.map((face, i) => {
+          const avgZ = face.reduce((s, vi) => s + projected[vi][2], 0) / 4;
+          return { i, avgZ };
+        }).sort((a, b) => b.avgZ - a.avgZ);
+
+        for (const { i } of faceOrder) {
+          const face = CUBE_FACES[i];
+          const [r, g, b] = FACE_COLORS[i];
+          ctx.fillStyle = `rgb(${r*255|0},${g*255|0},${b*255|0})`;
+          ctx.beginPath();
+          ctx.moveTo(projected[face[0]][0], projected[face[0]][1]);
+          for (let j = 1; j < 4; j++) {
+            ctx.lineTo(projected[face[j]][0], projected[face[j]][1]);
+          }
+          ctx.closePath();
+          ctx.fill();
+        }
+      },
+
+      captureFrame(encoder) {
+        encoder.addFrameFromCanvas(this.canvas);
+      },
+
+      resize(w, h) {
+        this.canvas.width = w;
+        this.canvas.height = h;
+      },
+
+      setAlpha(enabled) { /* handled in render */ },
+
+      destroy() {
+        if (this.canvas && this.canvas.parentNode) this.canvas.remove();
+        this.canvas = null;
+        this.ctx = null;
+      }
+    };
+
+    // ───────────────────────────────────────────────
+    //  Renderer: WebGL
+    // ───────────────────────────────────────────────
+    const WebGLRenderer = {
+      canvas: null,
+      gl: null,
+      program: null,
+      mvpLoc: null,
+      flipBuf: null,
+
+      init(w, h, alpha) {
+        this.canvas = document.createElement('canvas');
+        this.canvas.width = w;
+        this.canvas.height = h;
+        container.appendChild(this.canvas);
+
+        const gl = this.canvas.getContext('webgl', {
+          preserveDrawingBuffer: true,
+          alpha: true,
+          premultipliedAlpha: false,
+        });
+        if (!gl) throw new Error('WebGL not supported');
+        this.gl = gl;
+
+        // Shaders
+        const vsrc = `
+          attribute vec3 aPos;
+          attribute vec3 aCol;
+          uniform mat4 uMVP;
+          varying vec3 vCol;
+          void main() {
+            vCol = aCol;
+            gl_Position = uMVP * vec4(aPos, 1.0);
+          }`;
+        const fsrc = `
+          precision mediump float;
+          varying vec3 vCol;
+          void main() { gl_FragColor = vec4(vCol, 1.0); }`;
+
+        const vs = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(vs, vsrc);
+        gl.compileShader(vs);
+        const fs = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(fs, fsrc);
+        gl.compileShader(fs);
+
+        this.program = gl.createProgram();
+        gl.attachShader(this.program, vs);
+        gl.attachShader(this.program, fs);
+        gl.linkProgram(this.program);
+        gl.useProgram(this.program);
+
+        this.mvpLoc = gl.getUniformLocation(this.program, 'uMVP');
+
+        // Geometry
+        const { positions, colors } = buildCubeTriangles();
+        const posBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+        const aPos = gl.getAttribLocation(this.program, 'aPos');
+        gl.enableVertexAttribArray(aPos);
+        gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+
+        const colBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+        const aCol = gl.getAttribLocation(this.program, 'aCol');
+        gl.enableVertexAttribArray(aCol);
+        gl.vertexAttribPointer(aCol, 3, gl.FLOAT, false, 0, 0);
+
+        gl.enable(gl.DEPTH_TEST);
+        this.flipBuf = new Uint8Array(w * h * 4);
+      },
+
+      render(t) {
+        const gl = this.gl;
+        const w = this.canvas.width, h = this.canvas.height;
+        gl.viewport(0, 0, w, h);
+        if (alphaEnabled) {
+          gl.clearColor(0, 0, 0, 0);
+        } else {
+          gl.clearColor(0, 0, 0, 1);
+        }
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        gl.useProgram(this.program);
+
+        const mvp = getMVP(t, w / h);
+        gl.uniformMatrix4fv(this.mvpLoc, false, mvp);
+        gl.drawArrays(gl.TRIANGLES, 0, 36);
+      },
+
+      captureFrame(encoder) {
+        const gl = this.gl;
+        const w = this.canvas.width, h = this.canvas.height;
+        const rowBytes = w * 4;
+        const pixels = new Uint8Array(w * h * 4);
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+        // Flip vertically (WebGL is bottom-up)
+        const flipped = this.flipBuf;
+        for (let y = 0; y < h; y++) {
+          const srcOff = y * rowBytes;
+          const dstOff = (h - 1 - y) * rowBytes;
+          flipped.set(pixels.subarray(srcOff, srcOff + rowBytes), dstOff);
+        }
+        encoder.addFrameRgba(flipped);
+      },
+
+      resize(w, h) {
+        this.canvas.width = w;
+        this.canvas.height = h;
+        this.flipBuf = new Uint8Array(w * h * 4);
+      },
+
+      setAlpha(enabled) { /* handled in render */ },
+
+      destroy() {
+        const gl = this.gl;
+        if (gl) {
+          const ext = gl.getExtension('WEBGL_lose_context');
+          if (ext) ext.loseContext();
+        }
+        if (this.canvas && this.canvas.parentNode) this.canvas.remove();
+        this.canvas = null;
+        this.gl = null;
+        this.flipBuf = null;
+      }
+    };
+
+    // ───────────────────────────────────────────────
+    //  Renderer: Three.js
+    // ───────────────────────────────────────────────
+    const ThreeJSRenderer = {
+      canvas: null,
+      renderer: null,
+      scene: null,
+      camera: null,
+      cube: null,
+      flipBuf: null,
+
+      init(w, h, alpha) {
+        this.canvas = document.createElement('canvas');
+        this.canvas.width = w;
+        this.canvas.height = h;
+        container.appendChild(this.canvas);
+
+        this.renderer = new THREE.WebGLRenderer({
+          canvas: this.canvas,
+          preserveDrawingBuffer: true,
+          alpha: true,
+        });
+        this.renderer.setSize(w, h, false);
+        this.renderer.setPixelRatio(1);
+
+        this.scene = new THREE.Scene();
+        this.camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
+        this.camera.position.set(0, 0, 4);
+
+        // Cube with per-face colors
+        const geo = new THREE.BoxGeometry(2, 2, 2);
+        const mats = FACE_COLORS.map(([r, g, b]) =>
+          new THREE.MeshBasicMaterial({ color: new THREE.Color(r, g, b) })
+        );
+        this.cube = new THREE.Mesh(geo, mats);
+        this.scene.add(this.cube);
+
+        this.flipBuf = new Uint8Array(w * h * 4);
+      },
+
+      render(t) {
+        this.cube.rotation.y = t * Math.PI * 2;
+        this.cube.rotation.x = Math.sin(t * Math.PI * 2) * 0.4;
+
+        if (alphaEnabled) {
+          this.renderer.setClearColor(0x000000, 0);
+        } else {
+          this.renderer.setClearColor(0x000000, 1);
+        }
+        this.renderer.render(this.scene, this.camera);
+      },
+
+      captureFrame(encoder) {
+        const gl = this.renderer.getContext();
+        const w = this.canvas.width, h = this.canvas.height;
+        const rowBytes = w * 4;
+        const pixels = new Uint8Array(w * h * 4);
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+        // Flip vertically
+        const flipped = this.flipBuf;
+        for (let y = 0; y < h; y++) {
+          const srcOff = y * rowBytes;
+          const dstOff = (h - 1 - y) * rowBytes;
+          flipped.set(pixels.subarray(srcOff, srcOff + rowBytes), dstOff);
+        }
+        encoder.addFrameRgba(flipped);
+      },
+
+      resize(w, h) {
+        this.renderer.setSize(w, h, false);
+        this.camera.aspect = w / h;
+        this.camera.updateProjectionMatrix();
+        this.flipBuf = new Uint8Array(w * h * 4);
+      },
+
+      setAlpha(enabled) { /* handled in render */ },
+
+      destroy() {
+        if (this.renderer) {
+          this.renderer.dispose();
+          this.renderer.forceContextLoss();
+        }
+        if (this.canvas && this.canvas.parentNode) this.canvas.remove();
+        this.renderer = null;
+        this.scene = null;
+        this.camera = null;
+        this.cube = null;
+        this.canvas = null;
+        this.flipBuf = null;
+      }
+    };
+
+    // ───────────────────────────────────────────────
+    //  Renderer: P5.js
+    // ───────────────────────────────────────────────
+    const P5JSRenderer = {
+      canvas: null,
+      p5: null,
+      renderTime: 0,
+
+      init(w, h, alpha) {
+        const self = this;
+        this.p5 = new p5(function(p) {
+          p.setup = function() {
+            p.setAttributes('preserveDrawingBuffer', true);
+            const c = p.createCanvas(w, h, p.WEBGL);
+            c.parent(container);
+            self.canvas = c.elt;
+            p.pixelDensity(1);
+            p.noLoop();
+          };
+
+          p.draw = function() {
+            const t = self.renderTime;
+
+            if (alphaEnabled) {
+              p.clear();
+            } else {
+              p.background(0);
+            }
+
+            p.perspective(p.PI / 4, w / h, 0.1, 100);
+            p.camera(0, 0, 4, 0, 0, 0, 0, 1, 0);
+
+            p.rotateY(t * p.TWO_PI);
+            p.rotateX(Math.sin(t * p.TWO_PI) * 0.4);
+
+            // Draw 6 colored quads for the cube (P5 box() doesn't support per-face colors)
+            const s = 1; // half-size
+            const faces = [
+              // [normal axis, sign, vertices (4 corners CCW)]
+              { col: FACE_COLORS[0], verts: [[-s,-s,-s],[s,-s,-s],[s,s,-s],[-s,s,-s]] },   // back
+              { col: FACE_COLORS[1], verts: [[s,-s,s],[-s,-s,s],[-s,s,s],[s,s,s]] },        // front
+              { col: FACE_COLORS[2], verts: [[-s,-s,s],[-s,-s,-s],[-s,s,-s],[-s,s,s]] },    // left
+              { col: FACE_COLORS[3], verts: [[s,-s,-s],[s,-s,s],[s,s,s],[s,s,-s]] },         // right
+              { col: FACE_COLORS[4], verts: [[-s,-s,s],[s,-s,s],[s,-s,-s],[-s,-s,-s]] },     // bottom
+              { col: FACE_COLORS[5], verts: [[-s,s,-s],[s,s,-s],[s,s,s],[-s,s,s]] },         // top
+            ];
+
+            p.noStroke();
+            for (const face of faces) {
+              const [r, g, b] = face.col;
+              p.fill(r * 255, g * 255, b * 255);
+              p.beginShape();
+              for (const v of face.verts) {
+                p.vertex(v[0], v[1], v[2]);
+              }
+              p.endShape(p.CLOSE);
+            }
+          };
+        });
+      },
+
+      render(t) {
+        this.renderTime = t;
+        if (this.p5) this.p5.redraw();
+      },
+
+      captureFrame(encoder) {
+        // P5 WEBGL uses a GL context; read pixels and flip
+        if (!this.p5 || !this.canvas) return;
+        const gl = this.p5.drawingContext;
+        if (!gl || !gl.readPixels) {
+          // Fallback: 2D context
+          encoder.addFrameFromCanvas(this.canvas);
+          return;
+        }
+        const w = this.canvas.width, h = this.canvas.height;
+        const rowBytes = w * 4;
+        const pixels = new Uint8Array(w * h * 4);
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+        // Flip vertically (WebGL bottom-up)
+        const flipped = new Uint8Array(w * h * 4);
+        for (let y = 0; y < h; y++) {
+          const srcOff = y * rowBytes;
+          const dstOff = (h - 1 - y) * rowBytes;
+          flipped.set(pixels.subarray(srcOff, srcOff + rowBytes), dstOff);
+        }
+        encoder.addFrameRgba(flipped);
+      },
+
+      resize(w, h) {
+        if (this.p5) this.p5.resizeCanvas(w, h);
+      },
+
+      setAlpha(enabled) { /* handled in draw */ },
+
+      destroy() {
+        if (this.p5) {
+          this.p5.remove();
+          this.p5 = null;
+        }
+        this.canvas = null;
+      }
+    };
+
+    // ───────────────────────────────────────────────
+    //  Renderer: WebGPU
+    // ───────────────────────────────────────────────
+    const WebGPURenderer = {
+      canvas: null,
+      device: null,
+      context: null,
+      pipeline: null,
+      vertexBuffer: null,
+      uniformBuffer: null,
+      bindGroup: null,
+      depthTexture: null,
+      supported: false,
+      readBuffer: null,
+      canvasFormat: null,
+
+      async init(w, h, alpha) {
+        if (!navigator.gpu) {
+          container.innerHTML = '<div class="unsupported-msg">WebGPU is not supported in this browser.<br>Try Chrome 113+ or Edge 113+.</div>';
+          this.supported = false;
+          return;
+        }
+
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+          container.innerHTML = '<div class="unsupported-msg">WebGPU adapter not available.</div>';
+          this.supported = false;
+          return;
+        }
+
+        this.device = await adapter.requestDevice();
+        this.supported = true;
+
+        this.canvas = document.createElement('canvas');
+        this.canvas.width = w;
+        this.canvas.height = h;
+        container.appendChild(this.canvas);
+
+        this.context = this.canvas.getContext('webgpu');
+        this.canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+        this.context.configure({
+          device: this.device,
+          format: this.canvasFormat,
+          alphaMode: alpha ? 'premultiplied' : 'opaque',
+        });
+
+        // WGSL shaders
+        const shaderCode = `
+          struct Uniforms { mvp: mat4x4<f32> };
+          @group(0) @binding(0) var<uniform> u: Uniforms;
+
+          struct VOut {
+            @builtin(position) pos: vec4<f32>,
+            @location(0) col: vec3<f32>,
+          };
+
+          @vertex fn vs(@location(0) pos: vec3<f32>, @location(1) col: vec3<f32>) -> VOut {
+            var out: VOut;
+            out.pos = u.mvp * vec4<f32>(pos, 1.0);
+            out.col = col;
+            return out;
+          }
+
+          @fragment fn fs(@location(0) col: vec3<f32>) -> @location(0) vec4<f32> {
+            return vec4<f32>(col, 1.0);
+          }
+        `;
+
+        const shaderModule = this.device.createShaderModule({ code: shaderCode });
+
+        // Vertex buffer (interleaved pos + color)
+        const { positions, colors } = buildCubeTriangles();
+        const vertCount = positions.length / 3;
+        const interleaved = new Float32Array(vertCount * 6);
+        for (let i = 0; i < vertCount; i++) {
+          interleaved[i*6]   = positions[i*3];
+          interleaved[i*6+1] = positions[i*3+1];
+          interleaved[i*6+2] = positions[i*3+2];
+          interleaved[i*6+3] = colors[i*3];
+          interleaved[i*6+4] = colors[i*3+1];
+          interleaved[i*6+5] = colors[i*3+2];
+        }
+        this.vertexBuffer = this.device.createBuffer({
+          size: interleaved.byteLength,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        });
+        this.device.queue.writeBuffer(this.vertexBuffer, 0, interleaved);
+
+        // Uniform buffer
+        this.uniformBuffer = this.device.createBuffer({
+          size: 64,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        const bindGroupLayout = this.device.createBindGroupLayout({
+          entries: [{
+            binding: 0,
+            visibility: GPUShaderStage.VERTEX,
+            buffer: { type: 'uniform' },
+          }],
+        });
+
+        this.bindGroup = this.device.createBindGroup({
+          layout: bindGroupLayout,
+          entries: [{ binding: 0, resource: { buffer: this.uniformBuffer } }],
+        });
+
+        const pipelineLayout = this.device.createPipelineLayout({
+          bindGroupLayouts: [bindGroupLayout],
+        });
+
+        this.pipeline = this.device.createRenderPipeline({
+          layout: pipelineLayout,
+          vertex: {
+            module: shaderModule,
+            entryPoint: 'vs',
+            buffers: [{
+              arrayStride: 24,
+              attributes: [
+                { shaderLocation: 0, offset: 0, format: 'float32x3' },
+                { shaderLocation: 1, offset: 12, format: 'float32x3' },
+              ],
+            }],
+          },
+          fragment: {
+            module: shaderModule,
+            entryPoint: 'fs',
+            targets: [{ format: this.canvasFormat }],
+          },
+          depthStencil: {
+            format: 'depth24plus',
+            depthWriteEnabled: true,
+            depthCompare: 'less',
+          },
+          primitive: {
+            topology: 'triangle-list',
+            cullMode: 'back',
+          },
+        });
+
+        this._createDepthTexture(w, h);
+      },
+
+      _createDepthTexture(w, h) {
+        if (this.depthTexture) this.depthTexture.destroy();
+        this.depthTexture = this.device.createTexture({
+          size: [w, h],
+          format: 'depth24plus',
+          usage: GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+      },
+
+      render(t) {
+        if (!this.supported || !this.device) return;
+
+        const w = this.canvas.width, h = this.canvas.height;
+        const mvp = getMVP(t, w / h);
+        this.device.queue.writeBuffer(this.uniformBuffer, 0, mvp);
+
+        const encoder = this.device.createCommandEncoder();
+        const textureView = this.context.getCurrentTexture().createView();
+
+        const clearValue = alphaEnabled
+          ? { r: 0, g: 0, b: 0, a: 0 }
+          : { r: 0, g: 0, b: 0, a: 1 };
+
+        const pass = encoder.beginRenderPass({
+          colorAttachments: [{
+            view: textureView,
+            loadOp: 'clear',
+            clearValue,
+            storeOp: 'store',
+          }],
+          depthStencilAttachment: {
+            view: this.depthTexture.createView(),
+            depthLoadOp: 'clear',
+            depthClearValue: 1.0,
+            depthStoreOp: 'store',
+          },
+        });
+
+        pass.setPipeline(this.pipeline);
+        pass.setBindGroup(0, this.bindGroup);
+        pass.setVertexBuffer(0, this.vertexBuffer);
+        pass.draw(36);
+        pass.end();
+
+        this.device.queue.submit([encoder.finish()]);
+      },
+
+      async captureFrame(proresEncoder) {
+        if (!this.supported || !this.device) return;
+
+        const w = this.canvas.width, h = this.canvas.height;
+        const texture = this.context.getCurrentTexture();
+
+        // WebGPU requires 256-byte row alignment for buffer copies
+        const bytesPerPixel = 4;
+        const unpaddedBytesPerRow = w * bytesPerPixel;
+        const align = 256;
+        const paddedBytesPerRow = Math.ceil(unpaddedBytesPerRow / align) * align;
+
+        const bufferSize = paddedBytesPerRow * h;
+        const readBuffer = this.device.createBuffer({
+          size: bufferSize,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
+
+        const cmdEncoder = this.device.createCommandEncoder();
+        cmdEncoder.copyTextureToBuffer(
+          { texture },
+          { buffer: readBuffer, bytesPerRow: paddedBytesPerRow, rowsPerImage: h },
+          { width: w, height: h },
+        );
+        this.device.queue.submit([cmdEncoder.finish()]);
+
+        await readBuffer.mapAsync(GPUMapMode.READ);
+        const mapped = new Uint8Array(readBuffer.getMappedRange());
+
+        const pixels = new Uint8Array(w * h * 4);
+        const isBGRA = this.canvasFormat.includes('bgra');
+
+        for (let y = 0; y < h; y++) {
+          const srcOff = y * paddedBytesPerRow;
+          const dstOff = y * unpaddedBytesPerRow;
+          if (isBGRA) {
+            // Swap B and R channels
+            for (let x = 0; x < w; x++) {
+              const si = srcOff + x * 4;
+              const di = dstOff + x * 4;
+              pixels[di]     = mapped[si + 2]; // R <- B
+              pixels[di + 1] = mapped[si + 1]; // G
+              pixels[di + 2] = mapped[si];     // B <- R
+              pixels[di + 3] = mapped[si + 3]; // A
+            }
+          } else {
+            pixels.set(mapped.subarray(srcOff, srcOff + unpaddedBytesPerRow), dstOff);
+          }
+        }
+
+        readBuffer.unmap();
+        readBuffer.destroy();
+
+        proresEncoder.addFrameRgba(pixels);
+      },
+
+      resize(w, h) {
+        if (!this.supported || !this.device) return;
+        this.canvas.width = w;
+        this.canvas.height = h;
+        this.context.configure({
+          device: this.device,
+          format: this.canvasFormat,
+          alphaMode: alphaEnabled ? 'premultiplied' : 'opaque',
+        });
+        this._createDepthTexture(w, h);
+      },
+
+      setAlpha(enabled) {
+        if (!this.supported || !this.device) return;
+        this.context.configure({
+          device: this.device,
+          format: this.canvasFormat,
+          alphaMode: enabled ? 'premultiplied' : 'opaque',
+        });
+      },
+
+      destroy() {
+        if (this.depthTexture) { this.depthTexture.destroy(); this.depthTexture = null; }
+        if (this.vertexBuffer) { this.vertexBuffer.destroy(); this.vertexBuffer = null; }
+        if (this.uniformBuffer) { this.uniformBuffer.destroy(); this.uniformBuffer = null; }
+        if (this.device) { this.device.destroy(); this.device = null; }
+        if (this.canvas && this.canvas.parentNode) this.canvas.remove();
+        this.canvas = null;
+        this.context = null;
+        this.supported = false;
+      }
+    };
+
+    // ───────────────────────────────────────────────
+    //  Renderer registry
+    // ───────────────────────────────────────────────
+    const renderers = {
+      canvas2d: Canvas2DRenderer,
+      webgl: WebGLRenderer,
+      threejs: ThreeJSRenderer,
+      p5js: P5JSRenderer,
+      webgpu: WebGPURenderer,
+    };
+
+    // ───────────────────────────────────────────────
+    //  Tab switching
+    // ───────────────────────────────────────────────
+    async function switchTab(tab) {
+      if (isRecording) return;
+      if (tab === activeTab && currentRenderer) return;
+
+      // Stop preview
+      if (animFrameId) {
+        cancelAnimationFrame(animFrameId);
+        animFrameId = null;
+      }
+
+      // Destroy current renderer
+      if (currentRenderer) {
+        currentRenderer.destroy();
+        currentRenderer = null;
+      }
+
+      // Clear container
+      container.innerHTML = '';
+      container.classList.toggle('alpha-bg', alphaEnabled);
+
+      activeTab = tab;
+
+      // Update tab buttons
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tab);
+      });
+
+      const w = getWidth(), h = getHeight();
+      const renderer = renderers[tab];
+      currentRenderer = renderer;
+
+      try {
+        await renderer.init(w, h, alphaEnabled);
+        log(`Initialized ${tab} renderer (${w}x${h})`, 'info');
+      } catch (err) {
+        log(`Failed to init ${tab}: ${err.message}`, 'error');
+        currentRenderer = null;
+        return;
+      }
+
+      // Start preview loop
+      startPreview();
+    }
+
+    function startPreview() {
+      previewStartTime = performance.now();
+
+      function loop() {
+        if (!currentRenderer || isRecording) return;
+        const elapsed = (performance.now() - previewStartTime) / 1000;
+        const t = (elapsed / 4) % 1; // 4 second loop
+        currentRenderer.render(t);
+        animFrameId = requestAnimationFrame(loop);
+      }
+      animFrameId = requestAnimationFrame(loop);
+    }
+
+    // Tab click handlers
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    });
+
+    // ───────────────────────────────────────────────
+    //  Alpha toggle
+    // ───────────────────────────────────────────────
+    const alphaToggle = document.getElementById('alphaToggle');
+    const profileSelect = document.getElementById('profile');
+
+    alphaToggle.addEventListener('change', () => {
+      alphaEnabled = alphaToggle.checked;
+
+      if (alphaEnabled) {
+        // Save previous profile and switch to 4444
+        prevProfile = profileSelect.value;
+        profileSelect.value = '4';
+        // Disable 422 profiles
+        for (const opt of profileSelect.options) {
+          if (parseInt(opt.value) < 4) opt.disabled = true;
+        }
+      } else {
+        // Restore
+        for (const opt of profileSelect.options) {
+          opt.disabled = false;
+        }
+        profileSelect.value = prevProfile;
+      }
+
+      container.classList.toggle('alpha-bg', alphaEnabled);
+
+      if (currentRenderer && currentRenderer.setAlpha) {
+        currentRenderer.setAlpha(alphaEnabled);
+      }
+    });
+
+    // ───────────────────────────────────────────────
+    //  Resolution change
+    // ───────────────────────────────────────────────
+    document.getElementById('resolution').addEventListener('change', () => {
+      if (isRecording || !currentRenderer) return;
+      const w = getWidth(), h = getHeight();
+      if (currentRenderer.resize) {
+        currentRenderer.resize(w, h);
+      }
+      log(`Resized to ${w}x${h}`, 'info');
+    });
+
+    // ───────────────────────────────────────────────
+    //  Recording
+    // ───────────────────────────────────────────────
+    const recordBtn = document.getElementById('recordBtn');
+
+    recordBtn.addEventListener('click', async () => {
+      if (isRecording) return;
+      if (!createProResEncoder) {
+        log(encoderLoadError ? encoderLoadError.message : 'Encoder not loaded', 'error');
+        return;
+      }
+      if (!currentRenderer) {
+        log('No renderer active', 'error');
+        return;
+      }
+      // WebGPU may not be supported
+      if (activeTab === 'webgpu' && !WebGPURenderer.supported) {
+        log('WebGPU not supported — cannot record', 'error');
+        return;
+      }
+
+      isRecording = true;
+      recordBtn.disabled = true;
+      document.querySelectorAll('.tab-btn').forEach(b => b.disabled = true);
+
+      // Stop preview
+      if (animFrameId) {
+        cancelAnimationFrame(animFrameId);
+        animFrameId = null;
+      }
+
+      const w = getWidth(), h = getHeight();
+      const fps = parseInt(document.getElementById('fps').value);
+      const duration = parseFloat(document.getElementById('duration').value);
+      const profile = parseInt(profileSelect.value);
+      const totalFrames = Math.round(fps * duration);
+
+      log(`Recording: ${activeTab} ${w}x${h} @ ${fps}fps, ${duration}s (${totalFrames} frames), profile=${profile}`, 'info');
+      setStatus('Encoding...');
+      setProgress(0);
+
+      let encoder = null;
+      try {
+        encoder = await createProResEncoder();
+        encoder.initialize({
+          width: w,
+          height: h,
+          frameRateNum: fps,
+          frameRateDen: 1,
+          profile,
+          quality: 100,
+        });
+
+        for (let frame = 0; frame < totalFrames; frame++) {
+          const t = totalFrames > 1 ? frame / (totalFrames - 1) : 0;
+          currentRenderer.render(t);
+          await currentRenderer.captureFrame(encoder);
+
+          const pct = ((frame + 1) / totalFrames * 100);
+          setProgress(pct);
+
+          // Yield to UI every 5 frames
+          if (frame % 5 === 0) {
+            setStatus(`Encoding ${frame + 1}/${totalFrames}`);
+            await new Promise(r => setTimeout(r, 0));
+          }
+        }
+
+        const movData = encoder.finalize();
+        encoder.destroy();
+        encoder = null;
+
+        const sizeMB = (movData.byteLength / 1024 / 1024).toFixed(2);
+        log(`Done! ${totalFrames} frames, ${sizeMB} MB`, 'success');
+        setStatus('Done');
+        setProgress(100);
+
+        // Download
+        const profileNames = ['422Proxy','422LT','422','422HQ','4444','4444XQ'];
+        const filename = `prores-${activeTab}-${profileNames[profile]}-${w}x${h}.mov`;
+        const blob = new Blob([movData], { type: 'video/quicktime' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+        log(`Downloaded ${filename}`, 'success');
+
+      } catch (err) {
+        log(`Encoding error: ${err.message}`, 'error');
+        setStatus('Error');
+        if (encoder) { encoder.destroy(); }
+      }
+
+      isRecording = false;
+      recordBtn.disabled = false;
+      document.querySelectorAll('.tab-btn').forEach(b => b.disabled = false);
+
+      // Resume preview
+      startPreview();
+    });
+
+    // ───────────────────────────────────────────────
+    //  Init
+    // ───────────────────────────────────────────────
+    log('Multi-Renderer Demo loaded', 'info');
+    switchTab('canvas2d');
+  </script>
+</body>
+</html>
