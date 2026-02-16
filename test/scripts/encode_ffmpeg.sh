@@ -73,13 +73,13 @@ while IFS='|' read -r NAME DIR WIDTH HEIGHT FPS_NUM FPS_DEN NUM_FRAMES HAS_ALPHA
     FPS="$FPS_NUM/$FPS_DEN"
     INPUT_ARGS=(-framerate "$FPS" -i "$INPUT_DIR/$PATTERN" -frames:v "$NUM_FRAMES")
 
-    # Encode with both modes: qscale=1 (matches our encoder) and default (adaptive trellis)
-    for MODE in ffmpeg ffmpeg-default; do
+    # Encode with both modes: qscale=1 (max quality) and default (adaptive trellis)
+    for MODE in ffmpeg-max-quality ffmpeg-default; do
         OUTPUT_DIR="$RESULTS_DIR/$NAME/$MODE"
 
-        if [[ "$MODE" == "ffmpeg" ]]; then
+        if [[ "$MODE" == "ffmpeg-max-quality" ]]; then
             QSCALE="1"
-            echo "=== Encoding: $NAME (FFmpeg qscale=1) ==="
+            echo "=== Encoding: $NAME (FFmpeg max quality, qscale=1) ==="
         else
             QSCALE=""
             echo "=== Encoding: $NAME (FFmpeg default/adaptive) ==="
