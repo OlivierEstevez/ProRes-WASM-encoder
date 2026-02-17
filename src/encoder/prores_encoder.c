@@ -289,6 +289,12 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
         else if (total_mbs <= 6075) tier = 2;  /* up to 1440x1080 */
         else                        tier = 3;
         ctx->bits_per_mb = prores_profile_info[config->profile].br_tab[tier];
+        /* FFmpeg multiplies bits_per_mb by 20 when alpha is present.
+         * The alpha plane is run-coded and can be large for varying alpha,
+         * so the inflated budget ensures YUV quality isn't constrained.
+         * We always encode alpha for 4444 profiles. */
+        if (is_444_profile(config->profile))
+            ctx->bits_per_mb *= 20;
     }
 
     /* Pre-compute quantization matrices for each possible q_scale */
