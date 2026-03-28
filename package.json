@@ -1,5 +1,5 @@
 {
-  "name": "prores-wasm",
+  "name": "prores-wasm-encoder",
   "version": "0.2.2",
   "description": "WebAssembly-based ProRes encoder for browser canvas encoding",
   "main": "dist/prores-encoder.js",
