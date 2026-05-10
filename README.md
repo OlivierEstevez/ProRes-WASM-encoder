@@ -14,7 +14,7 @@ A WebAssembly-based Apple ProRes encoder that encodes canvas frames to `.mov` fi
 ## Installation
 
 ```bash
-npm install prores-wasm
+npm install prores-wasm-encoder
 ```
 
 ## Quick Start
