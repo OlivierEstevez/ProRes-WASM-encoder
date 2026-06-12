@@ -1,6 +1,6 @@
 {
   "name": "prores-wasm-encoder",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "WebAssembly-based ProRes encoder for browser canvas encoding",
   "main": "dist/prores-encoder.js",
   "module": "dist/prores-encoder.esm.js",
