@@ -186,11 +186,25 @@ Approximate encoding speeds on modern hardware:
 
 ## License
 
-MIT License
+**[GNU Lesser General Public License v2.1 or later](LICENSE).**
+
+The encoder core is derived from FFmpeg's `proresenc_kostya.c` (© Anatoliy
+Wasserman, Konstantin Shishkov), which is LGPL-2.1+. As a derivative work,
+this project is distributed under the same license. The integer DCT is
+derived from libjpeg's `jfdctint.c` (IJG License).
+
+## Trademark
+
+"Apple ProRes" and "ProRes" are trademarks of Apple Inc. This project is an
+independent, unofficial implementation and is **not affiliated with, endorsed
+by, or certified by Apple Inc.** The codec bitstream is described in the
+public SMPTE RDD 36 specification. This software license grants no patent
+rights; see the SMPTE RDD 36 IP declarations.
 
 ## Acknowledgments
 
-- Based on ProRes codec reverse engineering by the FFmpeg project
+- Encoder derived from the FFmpeg project's ProRes encoder (`proresenc_kostya.c`)
+- Integer DCT derived from libjpeg's `jfdctint.c` (IJG License)
 - MOV container format based on Apple QuickTime File Format specification
 - Inspired by [h264-mp4-encoder](https://github.com/TrevorSundberg/h264-mp4-encoder) architecture and [mp4-wasm](https://github.com/mattdesl/mp4-wasm/?tab=readme-ov-file)
 

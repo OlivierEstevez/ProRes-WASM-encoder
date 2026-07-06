@@ -1,10 +1,18 @@
 /*
  * ProRes DCT Implementation
- * Based on Loeffler algorithm from libjpeg (jfdctint.c)
  * Integer-only implementation for WebAssembly compatibility
+ *
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ *
+ * The 8x8 integer forward DCT is derived from libjpeg's jfdctint.c
+ * (jpeg_fdct_islow), which implements the Loeffler-Ligtenberg-Moschytz
+ * algorithm and is distributed under the permissive IJG License.
+ *   Modifications for ProRes / WebAssembly:
+ *   Copyright (c) 2026 Olivier Estévez
  *
  * This is a slow-but-accurate integer DCT. For better accuracy at edges,
  * we use the proven libjpeg algorithm rather than faster approximations.
+ * See the LICENSE file for details.
  */
 
 #include "prores_dct.h"

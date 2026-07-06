@@ -14,7 +14,8 @@
   },
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "scripts": {
     "clean": "rm -rf dist",
@@ -35,7 +36,7 @@
     "quicktime"
   ],
   "author": "Olivier Estevez",
-  "license": "MIT",
+  "license": "LGPL-2.1-or-later",
   "homepage": "https://github.com/OlivierEstevez/ProRes-WASM-encoder#readme",
   "bugs": {
     "url": "https://github.com/OlivierEstevez/ProRes-WASM-encoder/issues"
