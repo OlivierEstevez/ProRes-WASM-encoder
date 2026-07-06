@@ -153,9 +153,9 @@ int prores_wasm_add_frame_rgba(void* ctx_ptr, const uint8_t* rgba_ptr)
         return -2;  /* encode failed */
     }
 
-    /* Write to muxer */
+    /* Write to muxer (frame_data points into the encoder's internal
+     * buffer; the muxer copies it, no free needed) */
     ret = mov_muxer_write_frame(ctx->muxer, frame_data, frame_size);
-    free(frame_data);
 
     if (ret < 0) {
         return -3;  /* mux failed (likely memory allocation / realloc) */
@@ -186,9 +186,9 @@ int prores_wasm_add_frame_yuv(void* ctx_ptr, const uint16_t* yuv_ptr)
         return ret;
     }
 
-    /* Write to muxer */
+    /* Write to muxer (frame_data points into the encoder's internal
+     * buffer; the muxer copies it, no free needed) */
     ret = mov_muxer_write_frame(ctx->muxer, frame_data, frame_size);
-    free(frame_data);
 
     return ret;
 }

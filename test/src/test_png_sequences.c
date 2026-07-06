@@ -185,9 +185,8 @@ static int encode_sequence(
             break;
         }
 
-        /* Mux */
+        /* Mux (frame_data is owned by the encoder, no free) */
         ret = mov_muxer_write_frame(muxer, frame_data, frame_size);
-        free(frame_data);
         if (ret < 0) {
             fprintf(stderr, "  ERROR: Failed to mux frame %d\n", frame);
             success = 0;

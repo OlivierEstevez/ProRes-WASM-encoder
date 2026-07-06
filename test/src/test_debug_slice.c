@@ -87,7 +87,7 @@ int main(int argc, char* argv[])
                 printf("  mux_write_frame returned: %d\n", mux_ret);
                 mov_muxer_destroy(muxer);
             }
-            free(frame_data);
+            /* frame_data is owned by the encoder, no free */
         }
 
         free(yuv);

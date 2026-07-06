@@ -1286,13 +1286,16 @@ static int encode_slice(ProResEncoderContext* ctx, PutBitContext* pb,
         put_bits(pb, 16, u_size);
     }
 
-    /* Write plane data byte by byte */
-    for (int i = 0; i < luma_size; i++) put_bits(pb, 8, luma_data[i]);
-    for (int i = 0; i < u_size; i++) put_bits(pb, 8, u_data[i]);
-    for (int i = 0; i < v_size; i++) put_bits(pb, 8, v_data[i]);
+    /* Copy plane data. The slice header is a whole number of bytes and pb
+     * is byte-aligned at every slice start, so flushing here just empties
+     * the pending header bytes and put_bytes can memcpy directly. */
+    flush_put_bits(pb);
+    put_bytes(pb, luma_data, luma_size);
+    put_bytes(pb, u_data, u_size);
+    put_bytes(pb, v_data, v_size);
 
     if (is_444 && ctx->a_plane && alpha_size > 0) {
-        for (int i = 0; i < alpha_size; i++) put_bits(pb, 8, ctx->slice_alpha_buf[i]);
+        put_bytes(pb, ctx->slice_alpha_buf, alpha_size);
     }
 
     return 0;
@@ -1520,12 +1523,9 @@ int prores_encoder_encode_frame(
     ctx->output_buf[2] = (frame_size >> 8) & 0xFF;
     ctx->output_buf[3] = frame_size & 0xFF;
 
-    /* Output */
-    *out_data = (uint8_t*)malloc(frame_size);
-    if (!*out_data) {
-        return -1;
-    }
-    memcpy(*out_data, ctx->output_buf, frame_size);
+    /* Output: point directly into the encoder's internal buffer.
+     * Valid until the next encode or destroy call — callers must not free. */
+    *out_data = ctx->output_buf;
     *out_size = frame_size;
 
     ctx->frame_count++;

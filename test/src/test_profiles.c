@@ -85,8 +85,8 @@ static int test_profile(ProResProfile profile, const char* name, const char* out
         return 1;
     }
 
+    /* frame_data is owned by the encoder, no free */
     mov_muxer_write_frame(muxer, frame_data, frame_size);
-    free(frame_data);
 
     uint8_t* mov_data = NULL;
     size_t mov_size = 0;
