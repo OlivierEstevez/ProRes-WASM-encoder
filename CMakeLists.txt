@@ -36,6 +36,11 @@ if(EMSCRIPTEN)
     # Emscripten-specific settings
     set(CMAKE_EXECUTABLE_SUFFIX ".js")
 
+    # WASM SIMD128 (universal since Chrome 91 / Firefox 89 / Safari 16.4)
+    # + link-time optimization. -msimd128 lets the vectorized DCT lower to
+    # native SIMD instructions and enables autovectorization elsewhere.
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msimd128 -flto")
+
     # Exported functions
     set(EXPORTED_FUNCTIONS
         "_malloc"
@@ -70,6 +75,8 @@ if(EMSCRIPTEN)
         "-s NO_EXIT_RUNTIME=1"
         "-s FILESYSTEM=0"
         "-O3"
+        "-msimd128"
+        "-flto"
         "--closure 1"
     )
 

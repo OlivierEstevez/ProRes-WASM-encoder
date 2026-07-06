@@ -165,12 +165,12 @@ encoder.initialize({
 
 ## Browser Support
 
-- Chrome 89+
+- Chrome 91+
 - Firefox 89+
-- Safari 15+
-- Edge 89+
+- Safari 16.4+
+- Edge 91+
 
-Requires WebAssembly support.
+Requires WebAssembly with SIMD128 (universal in browsers since early 2023).
 
 ## Performance
 

@@ -550,20 +550,7 @@ static int write_frame_header(ProResEncoderContext* ctx, uint8_t* buf)
  * DC offset (0x4000) is subtracted during encoding. */
 static void dct_block(const int16_t* src, int stride, int16_t* dst)
 {
-    int16_t block[64];
-    int i, j;
-
-    for (i = 0; i < 8; i++) {
-        for (j = 0; j < 8; j++) {
-            block[i * 8 + j] = src[i * stride + j];
-        }
-    }
-
-    prores_fdct_8x8(block);
-
-    for (i = 0; i < 64; i++) {
-        dst[i] = block[i];
-    }
+    prores_fdct_8x8_stride(src, dst, stride);
 }
 
 /*

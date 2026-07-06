@@ -13,6 +13,14 @@
  * This is a slow-but-accurate integer DCT. For better accuracy at edges,
  * we use the proven libjpeg algorithm rather than faster approximations.
  * See the LICENSE file for details.
+ *
+ * Two implementations of the same arithmetic:
+ *  - a scalar reference (prores_fdct_8x8_scalar), and
+ *  - a vectorized version using GCC/Clang portable vector extensions,
+ *    which Emscripten lowers to WASM SIMD128 (with -msimd128) and native
+ *    Clang/GCC lower to NEON/SSE. All operations are integer adds,
+ *    multiplies and shifts on 32-bit lanes, so both paths are bit-exact
+ *    with each other. Define PRORES_NO_SIMD to force the scalar path.
  */
 
 #include "prores_dct.h"
@@ -39,10 +47,10 @@
 #define DESCALE(x, n)  (((x) + (1 << ((n) - 1))) >> (n))
 
 /*
- * Perform the forward DCT on one 8x8 block of samples.
- * Based on libjpeg's jpeg_fdct_islow (jfdctint.c)
+ * Scalar reference: forward DCT on one 8x8 block, in place.
+ * Based on libjpeg's jpeg_fdct_islow (jfdctint.c).
  */
-void prores_fdct_8x8(int16_t* block)
+void prores_fdct_8x8_scalar(int16_t* block)
 {
     int32_t tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
     int32_t tmp10, tmp11, tmp12, tmp13;
@@ -161,23 +169,191 @@ void prores_fdct_8x8(int16_t* block)
     }
 }
 
+#if !defined(PRORES_NO_SIMD) && (defined(__clang__) || defined(__GNUC__))
+#define PRORES_DCT_VECTOR 1
+
+typedef int16_t v8i16 __attribute__((vector_size(16)));
+typedef int32_t v8i32 __attribute__((vector_size(32)));
+/* Unaligned-load variant: plane rows are only 2-byte aligned in general */
+typedef int16_t v8i16_u __attribute__((vector_size(16), aligned(2)));
+
+#define VSHUF(a, b, ...) __builtin_shufflevector(a, b, __VA_ARGS__)
+
+/* Transpose 8 vectors of 8 int16 lanes (rows in, columns out) */
+static inline void transpose8x8_i16(v8i16 r[8])
+{
+    v8i16 p0 = VSHUF(r[0], r[1], 0, 8, 1, 9, 2, 10, 3, 11);
+    v8i16 p1 = VSHUF(r[0], r[1], 4, 12, 5, 13, 6, 14, 7, 15);
+    v8i16 p2 = VSHUF(r[2], r[3], 0, 8, 1, 9, 2, 10, 3, 11);
+    v8i16 p3 = VSHUF(r[2], r[3], 4, 12, 5, 13, 6, 14, 7, 15);
+    v8i16 p4 = VSHUF(r[4], r[5], 0, 8, 1, 9, 2, 10, 3, 11);
+    v8i16 p5 = VSHUF(r[4], r[5], 4, 12, 5, 13, 6, 14, 7, 15);
+    v8i16 p6 = VSHUF(r[6], r[7], 0, 8, 1, 9, 2, 10, 3, 11);
+    v8i16 p7 = VSHUF(r[6], r[7], 4, 12, 5, 13, 6, 14, 7, 15);
+
+    v8i16 q0 = VSHUF(p0, p2, 0, 1, 8, 9, 2, 3, 10, 11);
+    v8i16 q1 = VSHUF(p0, p2, 4, 5, 12, 13, 6, 7, 14, 15);
+    v8i16 q2 = VSHUF(p1, p3, 0, 1, 8, 9, 2, 3, 10, 11);
+    v8i16 q3 = VSHUF(p1, p3, 4, 5, 12, 13, 6, 7, 14, 15);
+    v8i16 q4 = VSHUF(p4, p6, 0, 1, 8, 9, 2, 3, 10, 11);
+    v8i16 q5 = VSHUF(p4, p6, 4, 5, 12, 13, 6, 7, 14, 15);
+    v8i16 q6 = VSHUF(p5, p7, 0, 1, 8, 9, 2, 3, 10, 11);
+    v8i16 q7 = VSHUF(p5, p7, 4, 5, 12, 13, 6, 7, 14, 15);
+
+    r[0] = VSHUF(q0, q4, 0, 1, 2, 3, 8, 9, 10, 11);
+    r[1] = VSHUF(q0, q4, 4, 5, 6, 7, 12, 13, 14, 15);
+    r[2] = VSHUF(q1, q5, 0, 1, 2, 3, 8, 9, 10, 11);
+    r[3] = VSHUF(q1, q5, 4, 5, 6, 7, 12, 13, 14, 15);
+    r[4] = VSHUF(q2, q6, 0, 1, 2, 3, 8, 9, 10, 11);
+    r[5] = VSHUF(q2, q6, 4, 5, 6, 7, 12, 13, 14, 15);
+    r[6] = VSHUF(q3, q7, 0, 1, 2, 3, 8, 9, 10, 11);
+    r[7] = VSHUF(q3, q7, 4, 5, 6, 7, 12, 13, 14, 15);
+}
+
+/* Same butterfly pattern on 8 vectors of 8 int32 lanes */
+static inline void transpose8x8_i32(v8i32 r[8])
+{
+    v8i32 p0 = VSHUF(r[0], r[1], 0, 8, 1, 9, 2, 10, 3, 11);
+    v8i32 p1 = VSHUF(r[0], r[1], 4, 12, 5, 13, 6, 14, 7, 15);
+    v8i32 p2 = VSHUF(r[2], r[3], 0, 8, 1, 9, 2, 10, 3, 11);
+    v8i32 p3 = VSHUF(r[2], r[3], 4, 12, 5, 13, 6, 14, 7, 15);
+    v8i32 p4 = VSHUF(r[4], r[5], 0, 8, 1, 9, 2, 10, 3, 11);
+    v8i32 p5 = VSHUF(r[4], r[5], 4, 12, 5, 13, 6, 14, 7, 15);
+    v8i32 p6 = VSHUF(r[6], r[7], 0, 8, 1, 9, 2, 10, 3, 11);
+    v8i32 p7 = VSHUF(r[6], r[7], 4, 12, 5, 13, 6, 14, 7, 15);
+
+    v8i32 q0 = VSHUF(p0, p2, 0, 1, 8, 9, 2, 3, 10, 11);
+    v8i32 q1 = VSHUF(p0, p2, 4, 5, 12, 13, 6, 7, 14, 15);
+    v8i32 q2 = VSHUF(p1, p3, 0, 1, 8, 9, 2, 3, 10, 11);
+    v8i32 q3 = VSHUF(p1, p3, 4, 5, 12, 13, 6, 7, 14, 15);
+    v8i32 q4 = VSHUF(p4, p6, 0, 1, 8, 9, 2, 3, 10, 11);
+    v8i32 q5 = VSHUF(p4, p6, 4, 5, 12, 13, 6, 7, 14, 15);
+    v8i32 q6 = VSHUF(p5, p7, 0, 1, 8, 9, 2, 3, 10, 11);
+    v8i32 q7 = VSHUF(p5, p7, 4, 5, 12, 13, 6, 7, 14, 15);
+
+    r[0] = VSHUF(q0, q4, 0, 1, 2, 3, 8, 9, 10, 11);
+    r[1] = VSHUF(q0, q4, 4, 5, 6, 7, 12, 13, 14, 15);
+    r[2] = VSHUF(q1, q5, 0, 1, 2, 3, 8, 9, 10, 11);
+    r[3] = VSHUF(q1, q5, 4, 5, 6, 7, 12, 13, 14, 15);
+    r[4] = VSHUF(q2, q6, 0, 1, 2, 3, 8, 9, 10, 11);
+    r[5] = VSHUF(q2, q6, 4, 5, 6, 7, 12, 13, 14, 15);
+    r[6] = VSHUF(q3, q7, 0, 1, 2, 3, 8, 9, 10, 11);
+    r[7] = VSHUF(q3, q7, 4, 5, 6, 7, 12, 13, 14, 15);
+}
+
+#define DESCALE_V(x, n)  (((x) + (1 << ((n) - 1))) >> (n))
+
+/* One butterfly pass over 8 lanes. in[0..7] are the 8 values of each
+ * row (pass 1) or column (pass 2), one row/column per lane. shift_lo is
+ * how outputs 0/4 are scaled, descale_* the DESCALE amounts — matching
+ * the scalar code's two passes exactly. */
+static inline void fdct_pass_v(const v8i32 in[8], v8i32 out[8],
+                               int pass1)
+{
+    v8i32 tmp0 = in[0] + in[7];
+    v8i32 tmp7 = in[0] - in[7];
+    v8i32 tmp1 = in[1] + in[6];
+    v8i32 tmp6 = in[1] - in[6];
+    v8i32 tmp2 = in[2] + in[5];
+    v8i32 tmp5 = in[2] - in[5];
+    v8i32 tmp3 = in[3] + in[4];
+    v8i32 tmp4 = in[3] - in[4];
+
+    /* Even part per LL&M figure 1 */
+    v8i32 tmp10 = tmp0 + tmp3;
+    v8i32 tmp13 = tmp0 - tmp3;
+    v8i32 tmp11 = tmp1 + tmp2;
+    v8i32 tmp12 = tmp1 - tmp2;
+
+    if (pass1) {
+        out[0] = (tmp10 + tmp11) << PASS1_BITS;
+        out[4] = (tmp10 - tmp11) << PASS1_BITS;
+    } else {
+        out[0] = DESCALE_V(tmp10 + tmp11, OUT_SHIFT);
+        out[4] = DESCALE_V(tmp10 - tmp11, OUT_SHIFT);
+    }
+
+    int ds = pass1 ? (CONST_BITS - PASS1_BITS) : (CONST_BITS + OUT_SHIFT);
+
+    v8i32 z1 = (tmp12 + tmp13) * FIX_0_541196100;
+    out[2] = DESCALE_V(z1 + tmp13 * FIX_0_765366865, ds);
+    out[6] = DESCALE_V(z1 - tmp12 * FIX_1_847759065, ds);
+
+    /* Odd part per figure 8 */
+    z1 = tmp4 + tmp7;
+    v8i32 z2 = tmp5 + tmp6;
+    v8i32 z3 = tmp4 + tmp6;
+    v8i32 z4 = tmp5 + tmp7;
+    v8i32 z5 = (z3 + z4) * FIX_1_175875602;
+
+    tmp4 = tmp4 * FIX_0_298631336;
+    tmp5 = tmp5 * FIX_2_053119869;
+    tmp6 = tmp6 * FIX_3_072711026;
+    tmp7 = tmp7 * FIX_1_501321110;
+    z1 = z1 * -FIX_0_899976223;
+    z2 = z2 * -FIX_2_562915447;
+    z3 = z3 * -FIX_1_961570560;
+    z4 = z4 * -FIX_0_390180644;
+
+    z3 += z5;
+    z4 += z5;
+
+    out[7] = DESCALE_V(tmp4 + z1 + z3, ds);
+    out[5] = DESCALE_V(tmp5 + z2 + z4, ds);
+    out[3] = DESCALE_V(tmp6 + z2 + z3, ds);
+    out[1] = DESCALE_V(tmp7 + z1 + z4, ds);
+}
+
+/* Vectorized FDCT: src is an 8x8 block at the given stride (in int16
+ * elements), dst is a contiguous 64-coefficient block. Bit-exact with
+ * prores_fdct_8x8_scalar. */
+static void fdct_8x8_vec(const int16_t* src, int stride, int16_t* dst)
+{
+    v8i16 rows[8];
+    for (int i = 0; i < 8; i++)
+        rows[i] = *(const v8i16_u*)(src + i * stride);
+
+    /* Lane j = row j; vector i = element i of every row */
+    transpose8x8_i16(rows);
+
+    v8i32 e[8], w[8];
+    for (int i = 0; i < 8; i++)
+        e[i] = __builtin_convertvector(rows[i], v8i32);
+
+    /* Pass 1 (rows), all 8 rows in lanes */
+    fdct_pass_v(e, w, 1);
+
+    /* w[k] lane j = workspace[j*8+k]; pass 2 needs lanes = columns */
+    transpose8x8_i32(w);
+
+    v8i32 d[8];
+    fdct_pass_v(w, d, 0);
+
+    for (int k = 0; k < 8; k++)
+        *(v8i16_u*)(dst + k * 8) = __builtin_convertvector(d[k], v8i16);
+}
+#endif /* vector extensions */
+
+void prores_fdct_8x8(int16_t* block)
+{
+#ifdef PRORES_DCT_VECTOR
+    fdct_8x8_vec(block, 8, block);
+#else
+    prores_fdct_8x8_scalar(block);
+#endif
+}
+
 void prores_fdct_8x8_stride(const int16_t* src, int16_t* dst, int stride)
 {
-    int16_t block[64];
+#ifdef PRORES_DCT_VECTOR
+    fdct_8x8_vec(src, stride, dst);
+#else
     int i, j;
-
-    /* Copy with stride to contiguous block */
     for (i = 0; i < 8; i++) {
         for (j = 0; j < 8; j++) {
-            block[i * 8 + j] = src[i * stride + j];
+            dst[i * 8 + j] = src[i * stride + j];
         }
     }
-
-    /* Perform DCT */
-    prores_fdct_8x8(block);
-
-    /* Copy back */
-    for (i = 0; i < 64; i++) {
-        dst[i] = block[i];
-    }
+    prores_fdct_8x8_scalar(dst);
+#endif
 }
