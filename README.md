@@ -184,6 +184,24 @@ Approximate encoding speeds on modern hardware:
 
 > Speeds vary with CPU, profile, and content complexity.
 
+## Motivation
+
+I'm a motion designer and creative developer working in branding, and I kept
+running into the same wall: there was no good way to export transparent, high
+quality video directly from the web. Everything I built needed a server or a
+round-trip through desktop software just to get an alpha-capable master out of
+a canvas.
+
+So I built this for my own custom tools. It's a port of FFmpeg's `prores_ks`
+to C and WebAssembly. I'm not a C developer, and this started as an
+experiment to see how far I could push a browser-native ProRes encoder.
+Despite being built almost entirely with AI-assisted tools, it ended up
+working surprisingly well, matching FFmpeg's output closely enough that I
+decided to polish it into a proper library.
+
+It's still primarily a tool I use in my own work, but if it's useful to you,
+that makes me happy :)
+
 ## License
 
 **[GNU Lesser General Public License v2.1 or later](LICENSE).**
@@ -207,8 +225,3 @@ rights; see the SMPTE RDD 36 IP declarations.
 - Integer DCT derived from libjpeg's `jfdctint.c` (IJG License)
 - MOV container format based on Apple QuickTime File Format specification
 - Inspired by [h264-mp4-encoder](https://github.com/TrevorSundberg/h264-mp4-encoder) architecture and [mp4-wasm](https://github.com/mattdesl/mp4-wasm/?tab=readme-ov-file)
-
-## Related Projects
-
-- [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm) - Full FFmpeg in WebAssembly
-- [webm-wasm](https://github.com/GoogleChromeLabs/webm-wasm) - WebM encoder in WASM
