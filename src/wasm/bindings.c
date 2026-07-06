@@ -19,6 +19,8 @@ typedef struct {
     ProResColorRange range;
     uint16_t* yuv_buffer;
     size_t yuv_buffer_size;
+    int last_frame_size;    /* size of the packet from the last
+                               prores_wasm_encode_frame_* call */
 } ProResWasmContext;
 
 /*
@@ -191,6 +193,116 @@ int prores_wasm_add_frame_yuv(void* ctx_ptr, const uint16_t* yuv_ptr)
     ret = mov_muxer_write_frame(ctx->muxer, frame_data, frame_size);
 
     return ret;
+}
+
+/*
+ * Packet-level API (streaming / custom muxing)
+ *
+ * encode_frame_* encodes ONE frame and returns a pointer to the raw ProRes
+ * frame bitstream inside WASM memory — exactly the payload of one MOV
+ * sample, and exactly one "packet" in WebCodecs/MediaBunny terms (ProRes is
+ * intra-only, so every packet is a keyframe). The pointer is valid until
+ * the next encode call. The internal muxer is NOT touched: callers either
+ * mux themselves, or record the size with prores_wasm_mux_record_sample
+ * and assemble [header | packets... | moov] using the finalize_header /
+ * finalize_moov functions below. WASM memory stays constant regardless of
+ * recording length.
+ */
+
+/*
+ * Encode one RGBA frame, returning the raw ProRes packet.
+ *
+ * @param ctx_ptr   Context from prores_wasm_create
+ * @param rgba_ptr  Pointer to RGBA data (width * height * 4 bytes)
+ * @return          Packet pointer (valid until next encode), NULL on error
+ */
+EMSCRIPTEN_KEEPALIVE
+uint8_t* prores_wasm_encode_frame_rgba(void* ctx_ptr, const uint8_t* rgba_ptr)
+{
+    ProResWasmContext* ctx = (ProResWasmContext*)ctx_ptr;
+    if (!ctx || !rgba_ptr) return NULL;
+
+    if (ctx->profile >= 4) {
+        rgba_to_yuva444p10(rgba_ptr, ctx->yuv_buffer, ctx->width, ctx->height, ctx->range);
+    } else {
+        rgba_to_yuv422p10(rgba_ptr, ctx->yuv_buffer, ctx->width, ctx->height, ctx->range);
+    }
+
+    uint8_t* frame_data = NULL;
+    int frame_size = 0;
+    if (prores_encoder_encode_frame(ctx->encoder, ctx->yuv_buffer, &frame_data, &frame_size) < 0) {
+        ctx->last_frame_size = 0;
+        return NULL;
+    }
+
+    ctx->last_frame_size = frame_size;
+    return frame_data;
+}
+
+/*
+ * Encode one YUV frame (10-bit planar), returning the raw ProRes packet.
+ */
+EMSCRIPTEN_KEEPALIVE
+uint8_t* prores_wasm_encode_frame_yuv(void* ctx_ptr, const uint16_t* yuv_ptr)
+{
+    ProResWasmContext* ctx = (ProResWasmContext*)ctx_ptr;
+    if (!ctx || !yuv_ptr) return NULL;
+
+    uint8_t* frame_data = NULL;
+    int frame_size = 0;
+    if (prores_encoder_encode_frame(ctx->encoder, yuv_ptr, &frame_data, &frame_size) < 0) {
+        ctx->last_frame_size = 0;
+        return NULL;
+    }
+
+    ctx->last_frame_size = frame_size;
+    return frame_data;
+}
+
+/*
+ * Size in bytes of the packet returned by the last encode_frame_* call.
+ */
+EMSCRIPTEN_KEEPALIVE
+int prores_wasm_last_frame_size(void* ctx_ptr)
+{
+    ProResWasmContext* ctx = (ProResWasmContext*)ctx_ptr;
+    return ctx ? ctx->last_frame_size : 0;
+}
+
+/*
+ * Record a packet's size in the internal MOV muxer without storing its
+ * data (streaming mode). ~16 bytes of bookkeeping per frame.
+ */
+EMSCRIPTEN_KEEPALIVE
+int prores_wasm_mux_record_sample(void* ctx_ptr, int frame_size)
+{
+    ProResWasmContext* ctx = (ProResWasmContext*)ctx_ptr;
+    if (!ctx) return -1;
+    return mov_muxer_record_sample(ctx->muxer, frame_size);
+}
+
+/*
+ * Get the MOV file header (ftyp + mdat header) after all samples are
+ * recorded. Buffer is owned by the context; do NOT free.
+ */
+EMSCRIPTEN_KEEPALIVE
+const uint8_t* prores_wasm_finalize_header(void* ctx_ptr, size_t* out_size_ptr)
+{
+    ProResWasmContext* ctx = (ProResWasmContext*)ctx_ptr;
+    if (!ctx || !out_size_ptr) return NULL;
+    return mov_muxer_finalize_header(ctx->muxer, out_size_ptr);
+}
+
+/*
+ * Get the MOV moov box (call after prores_wasm_finalize_header).
+ * Buffer is owned by the context; do NOT free.
+ */
+EMSCRIPTEN_KEEPALIVE
+const uint8_t* prores_wasm_finalize_moov(void* ctx_ptr, size_t* out_size_ptr)
+{
+    ProResWasmContext* ctx = (ProResWasmContext*)ctx_ptr;
+    if (!ctx || !out_size_ptr) return NULL;
+    return mov_muxer_finalize_moov(ctx->muxer, out_size_ptr);
 }
 
 /*

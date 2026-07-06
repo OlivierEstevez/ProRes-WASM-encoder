@@ -73,10 +73,21 @@ struct MovMuxerContext {
     int num_samples;
     int max_samples;
 
-    /* Media data buffer */
+    /* Media data buffer (buffered mode only; allocated lazily on the
+     * first mov_muxer_write_frame so streaming mode pays nothing) */
     uint8_t* mdat_buf;
     size_t mdat_size;
     size_t mdat_capacity;
+
+    /* Total sample bytes (== mdat_size in buffered mode; also tracked in
+     * streaming mode where no data is stored) */
+    uint64_t total_sample_bytes;
+
+    /* Finalize output buffers (owned by the muxer) */
+    uint8_t* header_buf;
+    size_t header_size;
+    uint8_t* moov_buf;
+    size_t moov_size;
 
     /* Timing */
     uint32_t timescale;
@@ -124,21 +135,15 @@ MovMuxerContext* mov_muxer_create(const MovMuxerConfig* config)
         return NULL;
     }
 
-    /* Initial mdat buffer (will grow as needed) */
-    ctx->mdat_capacity = 8 * 1024 * 1024;  /* 8MB initial */
-    ctx->mdat_buf = (uint8_t*)malloc(ctx->mdat_capacity);
-    if (!ctx->mdat_buf) {
-        free(ctx->samples);
-        free(ctx);
-        return NULL;
-    }
+    /* mdat buffer is allocated lazily on the first write_frame (buffered
+     * mode); streaming mode (record_sample) never allocates it */
 
     return ctx;
 }
 
-int mov_muxer_write_frame(MovMuxerContext* ctx, const uint8_t* frame_data, int frame_size)
+int mov_muxer_record_sample(MovMuxerContext* ctx, int frame_size)
 {
-    if (!ctx || !frame_data || frame_size <= 0) {
+    if (!ctx || frame_size <= 0) {
         return -1;
     }
 
@@ -151,22 +156,43 @@ int mov_muxer_write_frame(MovMuxerContext* ctx, const uint8_t* frame_data, int f
         ctx->max_samples = new_max;
     }
 
+    /* Record sample info (offset relative to mdat data start) */
+    ctx->samples[ctx->num_samples].size = frame_size;
+    ctx->samples[ctx->num_samples].offset = ctx->total_sample_bytes;
+    ctx->num_samples++;
+    ctx->total_sample_bytes += (uint64_t)frame_size;
+
+    /* Update duration */
+    ctx->duration += ctx->config.fps_den;
+
+    return 0;
+}
+
+int mov_muxer_write_frame(MovMuxerContext* ctx, const uint8_t* frame_data, int frame_size)
+{
+    if (!ctx || !frame_data || frame_size <= 0) {
+        return -1;
+    }
+
+    /* Lazy initial mdat allocation */
+    if (!ctx->mdat_buf) {
+        ctx->mdat_capacity = 8 * 1024 * 1024;  /* 8MB initial */
+        ctx->mdat_buf = (uint8_t*)malloc(ctx->mdat_capacity);
+        if (!ctx->mdat_buf) return -1;
+    }
+
     /* Ensure mdat buffer capacity */
     if (ensure_mdat_capacity(ctx, frame_size) < 0) {
         return -1;
     }
 
-    /* Record sample info */
-    ctx->samples[ctx->num_samples].size = frame_size;
-    ctx->samples[ctx->num_samples].offset = ctx->mdat_size;
-    ctx->num_samples++;
+    if (mov_muxer_record_sample(ctx, frame_size) < 0) {
+        return -1;
+    }
 
     /* Copy frame data */
     memcpy(ctx->mdat_buf + ctx->mdat_size, frame_data, frame_size);
     ctx->mdat_size += frame_size;
-
-    /* Update duration */
-    ctx->duration += ctx->config.fps_den;
 
     return 0;
 }
@@ -621,10 +647,12 @@ static uint8_t* write_stsz(uint8_t* p, MovMuxerContext* ctx)
     return p;
 }
 
-/* Write stco (chunk offset) box */
-static uint8_t* write_stco(uint8_t* p, MovMuxerContext* ctx, uint64_t mdat_offset)
+/* Write stco (chunk offset) box, or co64 when any offset exceeds 32 bits.
+ * mdat_data_offset is the absolute file offset of the first sample. */
+static uint8_t* write_stco(uint8_t* p, MovMuxerContext* ctx, uint64_t mdat_data_offset)
 {
     uint8_t* start = p;
+    int use_co64 = (mdat_data_offset + ctx->total_sample_bytes) > 0xFFFFFFFFULL;
     p += 8;
 
     /* Version and flags */
@@ -634,17 +662,25 @@ static uint8_t* write_stco(uint8_t* p, MovMuxerContext* ctx, uint64_t mdat_offse
     WRITE_BE32(p, ctx->num_samples); p += 4;
 
     /* Chunk offsets (relative to file start) */
-    for (int i = 0; i < ctx->num_samples; i++) {
-        uint32_t offset = (uint32_t)(mdat_offset + 8 + ctx->samples[i].offset);
-        WRITE_BE32(p, offset); p += 4;
+    if (use_co64) {
+        for (int i = 0; i < ctx->num_samples; i++) {
+            uint64_t offset = mdat_data_offset + ctx->samples[i].offset;
+            WRITE_BE32(p, (uint32_t)(offset >> 32)); p += 4;
+            WRITE_BE32(p, (uint32_t)(offset & 0xFFFFFFFFu)); p += 4;
+        }
+    } else {
+        for (int i = 0; i < ctx->num_samples; i++) {
+            uint32_t offset = (uint32_t)(mdat_data_offset + ctx->samples[i].offset);
+            WRITE_BE32(p, offset); p += 4;
+        }
     }
 
-    write_box_header(start, MOV_STCO, p - start);
+    write_box_header(start, use_co64 ? MOV_CO64 : MOV_STCO, p - start);
     return p;
 }
 
 /* Write stbl (sample table) box */
-static uint8_t* write_stbl(uint8_t* p, MovMuxerContext* ctx, uint64_t mdat_offset)
+static uint8_t* write_stbl(uint8_t* p, MovMuxerContext* ctx, uint64_t mdat_data_offset)
 {
     uint8_t* start = p;
     p += 8;
@@ -654,64 +690,124 @@ static uint8_t* write_stbl(uint8_t* p, MovMuxerContext* ctx, uint64_t mdat_offse
     p = write_stss(p, ctx);
     p = write_stsc(p, ctx);
     p = write_stsz(p, ctx);
-    p = write_stco(p, ctx, mdat_offset);
+    p = write_stco(p, ctx, mdat_data_offset);
 
     write_box_header(start, MOV_STBL, p - start);
     return p;
 }
 
 /* Write minf (media information) box */
-static uint8_t* write_minf(uint8_t* p, MovMuxerContext* ctx, uint64_t mdat_offset)
+static uint8_t* write_minf(uint8_t* p, MovMuxerContext* ctx, uint64_t mdat_data_offset)
 {
     uint8_t* start = p;
     p += 8;
 
     p = write_vmhd(p);
     p = write_dinf(p);
-    p = write_stbl(p, ctx, mdat_offset);
+    p = write_stbl(p, ctx, mdat_data_offset);
 
     write_box_header(start, MOV_MINF, p - start);
     return p;
 }
 
 /* Write mdia (media) box */
-static uint8_t* write_mdia(uint8_t* p, MovMuxerContext* ctx, uint64_t mdat_offset)
+static uint8_t* write_mdia(uint8_t* p, MovMuxerContext* ctx, uint64_t mdat_data_offset)
 {
     uint8_t* start = p;
     p += 8;
 
     p = write_mdhd(p, ctx);
     p = write_hdlr(p);
-    p = write_minf(p, ctx, mdat_offset);
+    p = write_minf(p, ctx, mdat_data_offset);
 
     write_box_header(start, MOV_MDIA, p - start);
     return p;
 }
 
 /* Write trak (track) box */
-static uint8_t* write_trak(uint8_t* p, MovMuxerContext* ctx, uint64_t mdat_offset)
+static uint8_t* write_trak(uint8_t* p, MovMuxerContext* ctx, uint64_t mdat_data_offset)
 {
     uint8_t* start = p;
     p += 8;
 
     p = write_tkhd(p, ctx);
-    p = write_mdia(p, ctx, mdat_offset);
+    p = write_mdia(p, ctx, mdat_data_offset);
 
     write_box_header(start, MOV_TRAK, p - start);
     return p;
 }
 
 /* Write moov (movie) box */
-static uint8_t* write_moov(uint8_t* p, MovMuxerContext* ctx, uint64_t mdat_offset)
+static uint8_t* write_moov(uint8_t* p, MovMuxerContext* ctx, uint64_t mdat_data_offset)
 {
     uint8_t* start = p;
     p += 8;
 
     p = write_mvhd(p, ctx);
-    p = write_trak(p, ctx, mdat_offset);
+    p = write_trak(p, ctx, mdat_data_offset);
 
     write_box_header(start, MOV_MOOV, p - start);
     return p;
+}
+
+const uint8_t* mov_muxer_finalize_header(MovMuxerContext* ctx, size_t* out_size)
+{
+    if (!ctx || !out_size || ctx->num_samples == 0) {
+        return NULL;
+    }
+
+    /* mdat uses the 64-bit "largesize" form when the box wouldn't fit in
+     * the 32-bit size field (files > ~4 GB) */
+    int large = (ctx->total_sample_bytes + 8) > 0xFFFFFFFFULL;
+    size_t ftyp_size = 20;
+    size_t hdr_size = ftyp_size + (large ? 16 : 8);
+
+    free(ctx->header_buf);
+    ctx->header_buf = (uint8_t*)malloc(hdr_size);
+    if (!ctx->header_buf) return NULL;
+
+    uint8_t* p = write_ftyp(ctx->header_buf);
+
+    if (large) {
+        WRITE_BE32(p, 1);                 /* size = 1 → largesize follows type */
+        WRITE_BE32(p + 4, MOV_MDAT);
+        WRITE_BE64(p + 8, 16 + ctx->total_sample_bytes);
+        p += 16;
+    } else {
+        WRITE_BE32(p, (uint32_t)(8 + ctx->total_sample_bytes));
+        WRITE_BE32(p + 4, MOV_MDAT);
+        p += 8;
+    }
+
+    ctx->header_size = (size_t)(p - ctx->header_buf);
+    *out_size = ctx->header_size;
+    return ctx->header_buf;
+}
+
+const uint8_t* mov_muxer_finalize_moov(MovMuxerContext* ctx, size_t* out_size)
+{
+    if (!ctx || !out_size || ctx->num_samples == 0) {
+        return NULL;
+    }
+
+    /* Header determines where sample data starts */
+    if (!ctx->header_buf) {
+        size_t tmp;
+        if (!mov_muxer_finalize_header(ctx, &tmp)) return NULL;
+    }
+
+    /* Worst case per sample: stss 4 + stsz 4 + co64 8 = 16, plus margin */
+    size_t moov_cap = 2048 + (size_t)ctx->num_samples * 20;
+    free(ctx->moov_buf);
+    ctx->moov_buf = (uint8_t*)malloc(moov_cap);
+    if (!ctx->moov_buf) return NULL;
+
+    uint64_t mdat_data_offset = ctx->header_size;
+    uint8_t* p = write_moov(ctx->moov_buf, ctx, mdat_data_offset);
+
+    ctx->moov_size = (size_t)(p - ctx->moov_buf);
+    *out_size = ctx->moov_size;
+    return ctx->moov_buf;
 }
 
 int mov_muxer_finalize(MovMuxerContext* ctx, uint8_t** out_data, size_t* out_size)
@@ -724,43 +820,27 @@ int mov_muxer_finalize(MovMuxerContext* ctx, uint8_t** out_data, size_t* out_siz
         return -1;
     }
 
-    /* Calculate sizes */
-    size_t ftyp_size = 20;  /* ftyp box */
-    size_t mdat_size = 8 + ctx->mdat_size;  /* mdat header + data */
+    /* Buffered mode only: the mdat data must be here to assemble */
+    if (!ctx->mdat_buf || ctx->mdat_size != ctx->total_sample_bytes) {
+        return -1;
+    }
 
-    /* Estimate moov size (will be exact after first pass) */
-    size_t moov_estimate = 1024 + ctx->num_samples * 16;
+    size_t header_size, moov_size;
+    const uint8_t* header = mov_muxer_finalize_header(ctx, &header_size);
+    if (!header) return -1;
+    const uint8_t* moov = mov_muxer_finalize_moov(ctx, &moov_size);
+    if (!moov) return -1;
 
-    /* Allocate output buffer */
-    size_t total_size = ftyp_size + mdat_size + moov_estimate;
+    size_t total_size = header_size + ctx->mdat_size + moov_size;
     uint8_t* buf = (uint8_t*)malloc(total_size);
     if (!buf) return -1;
 
-    uint8_t* p = buf;
+    memcpy(buf, header, header_size);
+    memcpy(buf + header_size, ctx->mdat_buf, ctx->mdat_size);
+    memcpy(buf + header_size + ctx->mdat_size, moov, moov_size);
 
-    /* Write ftyp */
-    p = write_ftyp(p);
-
-    /* Write mdat header */
-    uint64_t mdat_offset = p - buf;
-    WRITE_BE32(p, 8 + ctx->mdat_size);
-    WRITE_BE32(p + 4, MOV_MDAT);
-    p += 8;
-
-    /* Copy mdat content */
-    memcpy(p, ctx->mdat_buf, ctx->mdat_size);
-    p += ctx->mdat_size;
-
-    /* Write moov */
-    p = write_moov(p, ctx, mdat_offset);
-
-    /* Final size */
-    *out_size = p - buf;
-    *out_data = (uint8_t*)realloc(buf, *out_size);
-    if (!*out_data) {
-        *out_data = buf;  /* Keep original if realloc fails */
-    }
-
+    *out_data = buf;
+    *out_size = total_size;
     return 0;
 }
 
@@ -770,5 +850,7 @@ void mov_muxer_destroy(MovMuxerContext* ctx)
 
     free(ctx->samples);
     free(ctx->mdat_buf);
+    free(ctx->header_buf);
+    free(ctx->moov_buf);
     free(ctx);
 }

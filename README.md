@@ -159,9 +159,23 @@ encoder.initialize({
 });
 ```
 
-## Limits
+## Long Recordings
 
-- **WASM memory ceiling**: 2 GB — the maximum number of frames depends on resolution and profile
+Frame data never accumulates in WASM memory: each encoded frame is handed
+to JavaScript immediately, so encoder memory stays constant (~64 MB)
+regardless of recording length.
+
+- `finalize()` returns the file as one `Uint8Array` (simple, fine for
+  short recordings)
+- `finalizeToBlob()` returns a `Blob` — preferred for long recordings,
+  since Blob parts are browser-managed and need no single contiguous
+  allocation
+- For unbounded recordings, pass `onFrameData` to `initialize()` and
+  stream each chunk to disk (e.g. OPFS), then assemble
+  `[header, ...chunks, moov]` from `finalizeHeaders()`
+
+Files over 4 GB are written with 64-bit offsets (`co64` + large `mdat`)
+automatically.
 
 ## Browser Support
 
