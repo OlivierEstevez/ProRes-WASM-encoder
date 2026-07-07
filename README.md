@@ -48,11 +48,56 @@ downloadMov(movData, 'my-video.mov');
 encoder.destroy();
 ```
 
+## Parallel Encoding
+
+ProRes is intra-only — every frame is independent — so frames encode in
+parallel across Web Workers with **byte-identical output** to the
+single-thread encoder. Each worker holds its own WASM instance; the main
+thread muxes the results in frame order. Scaling is near-linear with core
+count (measured ~6.4x on 8 workers for complex 1080p HQ).
+
+```javascript
+import { createProResEncoderPool, ProResProfile } from 'prores-wasm-encoder';
+
+const pool = await createProResEncoderPool({
+  width: 1920,
+  height: 1080,
+  frameRate: 30,
+  profile: ProResProfile.HQ,
+  workers: 4,           // default: min(hardwareConcurrency, 8)
+});
+
+// Same frame methods as the single-thread encoder, but async
+for (let i = 0; i < frames.length; i++) {
+  await pool.addFrameRgba(frames[i]);   // backpressured
+}
+
+const mov = await pool.finalize();       // or finalizeToBlob()
+await pool.destroy();
+```
+
+Workers are spawned from an inlined Blob URL, so **no bundler configuration
+is required** — it works in Vite, webpack, esbuild, plain `<script>`, and
+CDN builds alike. Requires Web Workers with module support (Chrome 80+,
+Safari 15+, Firefox 114+); where those are unavailable, use the
+single-thread `createProResEncoder()`.
+
+Streaming (`onFrameData`) and `finalizeToBlob()` work on the pool exactly as
+on the single-thread encoder, so long parallel recordings also stay within
+constant memory.
+
 ## API Reference
 
 ### `createProResEncoder(): Promise<ProResEncoder>`
 
 Creates and returns a new encoder instance. The WASM module is loaded automatically.
+
+### `createProResEncoderPool(options): Promise<ProResEncoderPool>`
+
+Creates a frame-parallel encoder pool (see [Parallel Encoding](#parallel-encoding)).
+Accepts the same options as `initialize()` plus `workers` (worker count).
+Frame-adding methods (`addFrameRgba`, `addFrameFromCanvas`,
+`addFrameFromImageData`) and `finalize()` / `finalizeToBlob()` are **async**.
 
 ### `ProResEncoder.initialize(options)`
 

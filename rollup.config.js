@@ -1,6 +1,6 @@
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import terser from '@rollup/plugin-terser';
-import { copyFileSync, mkdirSync } from 'fs';
+import { copyFileSync, mkdirSync, readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 
 function copyTypes() {
@@ -15,7 +15,44 @@ function copyTypes() {
   };
 }
 
+// Resolves the virtual `prores:worker` import to the pre-built, self-contained
+// worker bundle (dist/prores-worker.js) as a default-exported string. The
+// worker build below must run first so the file exists when this loads it.
+function inlineWorker(workerFile) {
+  const ID = 'prores:worker';
+  const RESOLVED = '\0' + ID;
+  return {
+    name: 'inline-worker',
+    resolveId(id) {
+      return id === ID ? RESOLVED : null;
+    },
+    load(id) {
+      if (id === RESOLVED) {
+        const code = readFileSync(resolve(workerFile), 'utf8');
+        return `export default ${JSON.stringify(code)};`;
+      }
+      return null;
+    }
+  };
+}
+
+const WORKER_FILE = 'dist/prores-worker.js';
+
 export default [
+  // Build 0: self-contained worker bundle (WASM inlined). Must be first so
+  // the inline-worker plugin can read it for the main builds.
+  {
+    input: 'lib/pool-worker.js',
+    output: {
+      file: WORKER_FILE,
+      format: 'es',
+      sourcemap: false
+    },
+    plugins: [
+      nodeResolve()
+    ],
+    external: []
+  },
   // UMD build (works with require() and <script> tag global)
   {
     input: 'lib/index.js',
@@ -27,6 +64,7 @@ export default [
     },
     plugins: [
       nodeResolve(),
+      inlineWorker(WORKER_FILE),
       copyTypes()
     ],
     external: []
@@ -42,6 +80,7 @@ export default [
     },
     plugins: [
       nodeResolve(),
+      inlineWorker(WORKER_FILE),
       terser()
     ],
     external: []
@@ -55,7 +94,8 @@ export default [
       sourcemap: true
     },
     plugins: [
-      nodeResolve()
+      nodeResolve(),
+      inlineWorker(WORKER_FILE)
     ],
     external: []
   }
