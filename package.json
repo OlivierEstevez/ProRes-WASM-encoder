@@ -20,6 +20,9 @@
   "sideEffects": false,
   "files": [
     "dist",
+    "!dist/prores-encoder.wasm.js",
+    "!dist/prores-encoder.core.wasm",
+    "!dist/prores-worker.js",
     "LICENSE"
   ],
   "scripts": {
@@ -27,6 +30,7 @@
     "build:wasm": "./build/build.sh",
     "build:js": "rollup -c",
     "build": "npm run clean && npm run build:wasm && npm run build:js",
+    "prepublishOnly": "npm run build",
     "test": "node test/test.js",
     "demo": "npx serve test"
   },

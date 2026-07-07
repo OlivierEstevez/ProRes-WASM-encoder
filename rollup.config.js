@@ -98,7 +98,7 @@ export default [
       dir: 'dist',
       format: 'es',
       entryFileNames: '[name].js',
-      chunkFileNames: 'prores-shared.js',
+      chunkFileNames: 'prores-core.js',
       sourcemap: true
     },
     plugins: [

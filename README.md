@@ -10,6 +10,7 @@ A WebAssembly-based Apple ProRes encoder that encodes canvas frames to `.mov` fi
 - **Canvas Integration**: Encode directly from `HTMLCanvasElement` or `OffscreenCanvas`
 - **Professional Color**: Internal 10-bit YUV encoding with BT.709 color matrix
 - **Pure WASM**: Runs entirely in the browser, no server-side processing
+- **Multi-threaded**: Optional frame-parallel encoding across Web Workers, no COOP/COEP headers needed
 
 ## Installation
 
@@ -48,16 +49,17 @@ downloadMov(movData, 'my-video.mov');
 encoder.destroy();
 ```
 
-## Parallel Encoding
+## Multi-threaded Encoding
 
 ProRes is intra-only — every frame is independent — so frames encode in
-parallel across Web Workers with **byte-identical output** to the
-single-thread encoder. Each worker holds its own WASM instance; the main
-thread muxes the results in frame order. Scaling is near-linear with core
-count (measured ~6.4x on 8 workers for complex 1080p HQ).
+parallel across Web Workers (real threads) with **byte-identical output**
+to the single-thread encoder. **No SharedArrayBuffer or COOP/COEP headers
+required** — each worker holds its own WASM instance, and the main thread
+muxes the results in frame order. Scaling is near-linear with core count
+(measured ~6.4x on 8 workers for complex 1080p HQ).
 
-Parallel encoding lives in its own entry point, so apps that don't use it
-never pay for it:
+Multi-threaded encoding lives in its own entry point, so apps that don't
+use it never pay for it:
 
 ```javascript
 import { createProResEncoderPool } from 'prores-wasm-encoder/parallel';
@@ -110,8 +112,8 @@ Creates and returns a new encoder instance. The WASM module is loaded automatica
 
 ### `createProResEncoderPool(options): Promise<ProResEncoderPool>`
 
-Imported from **`prores-wasm-encoder/parallel`**. Creates a frame-parallel
-encoder pool (see [Parallel Encoding](#parallel-encoding)).
+Imported from **`prores-wasm-encoder/parallel`**. Creates a multi-threaded,
+frame-parallel encoder pool (see [Multi-threaded Encoding](#multi-threaded-encoding)).
 Accepts the same options as `initialize()` plus `workers` (worker count).
 Frame-adding methods (`addFrameRgba`, `addFrameFromCanvas`,
 `addFrameFromImageData`) and `finalize()` / `finalizeToBlob()` are **async**.
