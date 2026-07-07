@@ -7,9 +7,14 @@
   "types": "dist/prores-encoder.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/prores-encoder.d.ts",
       "import": "./dist/prores-encoder.esm.js",
-      "require": "./dist/prores-encoder.js",
-      "types": "./dist/prores-encoder.d.ts"
+      "require": "./dist/prores-encoder.js"
+    },
+    "./parallel": {
+      "types": "./dist/prores-encoder-parallel.d.ts",
+      "import": "./dist/prores-encoder-parallel.esm.js",
+      "require": "./dist/prores-encoder-parallel.js"
     }
   },
   "sideEffects": false,

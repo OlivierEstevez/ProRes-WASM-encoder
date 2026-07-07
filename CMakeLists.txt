@@ -72,7 +72,10 @@ if(EMSCRIPTEN)
         "-s MODULARIZE=1"
         "-s EXPORT_NAME='createProResModule'"
         "-s EXPORT_ES6=1"
-        "-s SINGLE_FILE=1"
+        # The .wasm binary is kept separate (not base64-embedded in the glue)
+        # so the JS build can embed it exactly once and share the compiled
+        # module between the main thread and workers (instantiateWasm hook).
+        "-s SINGLE_FILE=0"
         "-s ALLOW_MEMORY_GROWTH=1"
         "-s INITIAL_MEMORY=67108864"
         "-s MAXIMUM_MEMORY=4294967296"

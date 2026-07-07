@@ -56,8 +56,12 @@ single-thread encoder. Each worker holds its own WASM instance; the main
 thread muxes the results in frame order. Scaling is near-linear with core
 count (measured ~6.4x on 8 workers for complex 1080p HQ).
 
+Parallel encoding lives in its own entry point, so apps that don't use it
+never pay for it:
+
 ```javascript
-import { createProResEncoderPool, ProResProfile } from 'prores-wasm-encoder';
+import { createProResEncoderPool } from 'prores-wasm-encoder/parallel';
+import { ProResProfile } from 'prores-wasm-encoder';
 
 const pool = await createProResEncoderPool({
   width: 1920,
@@ -78,13 +82,25 @@ await pool.destroy();
 
 Workers are spawned from an inlined Blob URL, so **no bundler configuration
 is required** — it works in Vite, webpack, esbuild, plain `<script>`, and
-CDN builds alike. Requires Web Workers with module support (Chrome 80+,
-Safari 15+, Firefox 114+); where those are unavailable, use the
-single-thread `createProResEncoder()`.
+CDN builds alike. The WASM binary ships and compiles exactly **once**: the
+compiled module is shared with every worker, so adding workers adds no
+download or compile cost. Requires Web Workers with module support
+(Chrome 80+, Safari 15+, Firefox 114+); where those are unavailable, use
+the single-thread `createProResEncoder()`.
 
 Streaming (`onFrameData`) and `finalizeToBlob()` work on the pool exactly as
 on the single-thread encoder, so long parallel recordings also stay within
 constant memory.
+
+### Bundle size
+
+| Import | Size (min+gzip) |
+|---|---|
+| `prores-wasm-encoder` | ~36 KB |
+| `prores-wasm-encoder/parallel` | ~41 KB |
+
+With a bundler, apps importing both entries share the common chunk (encoder
+core + WASM), so the combined cost is the parallel size, not the sum.
 
 ## API Reference
 
@@ -94,7 +110,8 @@ Creates and returns a new encoder instance. The WASM module is loaded automatica
 
 ### `createProResEncoderPool(options): Promise<ProResEncoderPool>`
 
-Creates a frame-parallel encoder pool (see [Parallel Encoding](#parallel-encoding)).
+Imported from **`prores-wasm-encoder/parallel`**. Creates a frame-parallel
+encoder pool (see [Parallel Encoding](#parallel-encoding)).
 Accepts the same options as `initialize()` plus `workers` (worker count).
 Frame-adding methods (`addFrameRgba`, `addFrameFromCanvas`,
 `addFrameFromImageData`) and `finalize()` / `finalizeToBlob()` are **async**.

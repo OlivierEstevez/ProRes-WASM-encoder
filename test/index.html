@@ -374,7 +374,11 @@
         const moduleUrl = new URL('../dist/prores-encoder.esm.js', import.meta.url);
         const mod = await import(moduleUrl.href);
         createProResEncoder = mod.default;
-        createProResEncoderPool = mod.createProResEncoderPool;
+        // Parallel encoding lives in its own entry point so the base
+        // library stays small; the browser shares the common chunk.
+        const parallelUrl = new URL('../dist/prores-encoder-parallel.esm.js', import.meta.url);
+        const parallelMod = await import(parallelUrl.href);
+        createProResEncoderPool = parallelMod.createProResEncoderPool;
         log('Encoder module loaded', 'info');
       } catch (err) {
         moduleLoadError = err;
