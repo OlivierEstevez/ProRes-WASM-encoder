@@ -80,9 +80,12 @@ compare original.png decoded.png diff.png
 npm run demo    # Serves test/ on localhost:3000
 ```
 
-Two HTML demos:
+Three HTML demos:
 - `test/index.html` — Interactive canvas recording with P5.js
 - `test/test_wasm_sequences.html` — Batch profile comparison
+- `test/mediabunny.html` — Recording via the MediaBunny custom-encoder
+  integration (`prores-wasm-encoder/mediabunny`); requires `npm install`
+  first so `mediabunny` is present as a devDependency
 
 ## Architecture
 
