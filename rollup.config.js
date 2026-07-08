@@ -10,6 +10,7 @@ function copyTypes() {
       const copies = [
         ['lib/index.d.ts', 'dist/prores-encoder.d.ts'],
         ['lib/parallel.d.ts', 'dist/prores-encoder-parallel.d.ts'],
+        ['lib/mediabunny.d.ts', 'dist/prores-encoder-mediabunny.d.ts'],
       ];
       for (const [src, dest] of copies) {
         mkdirSync(dirname(resolve(dest)), { recursive: true });
@@ -93,6 +94,7 @@ export default [
     input: {
       'prores-encoder.esm': 'lib/index.js',
       'prores-encoder-parallel.esm': 'lib/parallel.js',
+      'prores-encoder-mediabunny.esm': 'lib/mediabunny.js',
     },
     output: {
       dir: 'dist',
@@ -107,7 +109,9 @@ export default [
       inlineWorker(WORKER_FILE),
       copyTypes()
     ],
-    external: []
+    // MediaBunny is a peer dependency of the /mediabunny entry — never
+    // bundle it (the other entries don't import it).
+    external: ['mediabunny']
   },
   // UMD builds (self-contained; for require() and <script>/CDN use)
   umd('lib/index.js', 'dist/prores-encoder.js', 'ProRes', false),

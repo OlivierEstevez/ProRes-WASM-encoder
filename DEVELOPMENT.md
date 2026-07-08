@@ -77,12 +77,17 @@ compare original.png decoded.png diff.png
 ## Development Server
 
 ```bash
-npm run demo    # Serves test/ on localhost:3000
+npm run demo    # Serves the repo root on localhost:3000
 ```
 
-Two HTML demos:
+Serving the repo root lets the demos load the built encoder from `/dist` and
+their dependencies from `/node_modules` directly — no CDN, no symlinks. Run
+`npm run build` and `npm install` first, then open one of:
 - `test/index.html` — Interactive canvas recording with P5.js
 - `test/test_wasm_sequences.html` — Batch profile comparison
+- `test/mediabunny.html` — Recording via the MediaBunny custom-encoder
+  integration (`prores-wasm-encoder/mediabunny`); resolves `mediabunny` from
+  the installed devDependency
 
 ## Architecture
 

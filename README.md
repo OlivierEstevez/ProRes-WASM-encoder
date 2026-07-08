@@ -11,6 +11,7 @@ A WebAssembly-based Apple ProRes encoder that encodes canvas frames to `.mov` fi
 - **Professional Color**: Internal 10-bit YUV encoding with BT.709 color matrix
 - **Pure WASM**: Runs entirely in the browser, no server-side processing
 - **Multi-threaded**: Optional frame-parallel encoding across Web Workers, no COOP/COEP headers needed
+- **MediaBunny Compatible**: Drop-in custom encoder for [MediaBunny](https://mediabunny.dev)'s conversion and muxing pipelines
 
 ## Installation
 
@@ -103,6 +104,45 @@ constant memory.
 
 With a bundler, apps importing both entries share the common chunk (encoder
 core + WASM), so the combined cost is the parallel size, not the sum.
+
+## MediaBunny Integration
+
+This library can plug into [MediaBunny](https://mediabunny.dev)'s custom-encoder
+API, so any MediaBunny `Output` or `Conversion` targeting the `'prores'`
+codec encodes through it.
+
+```javascript
+import { Output, BufferTarget, MovOutputFormat, CanvasSource } from 'mediabunny';
+import { registerProResEncoder } from 'prores-wasm-encoder/mediabunny';
+
+registerProResEncoder(); // multi-threaded when Web Workers are available
+
+const output = new Output({
+  format: new MovOutputFormat(),
+  target: new BufferTarget(),
+});
+const source = new CanvasSource(canvas, {
+  codec: 'prores',
+  fullCodecString: 'apch',   // pick the variant by fourcc: apco, apcs, apcn, apch, ap4h, ap4x
+  bitrate: 100_000_000,
+});
+output.addVideoTrack(source, { frameRate: 30 });
+await output.start();
+
+for (let f = 0; f < totalFrames; f++) {
+  drawFrame(f);                      // your rendering code
+  await source.add(f / 30, 1 / 30);  // capture + encode
+}
+
+await output.finalize();
+// output.target.buffer is the finished .mov
+```
+
+`mediabunny` is an optional peer dependency (`npm install mediabunny`), and
+this entry point is ESM-only. Select the ProRes variant with
+`fullCodecString` (a ProRes fourcc), or omit it and MediaBunny infers one
+from `bitrate` and alpha settings. Encoded frames are identical to the ones
+this library's own muxer writes.
 
 ## API Reference
 
