@@ -43,7 +43,7 @@
     "build:js": "rollup -c",
     "build": "npm run clean && npm run build:wasm && npm run build:js",
     "prepublishOnly": "npm run build",
-    "test": "node test/test.js",
+    "test": "node --test 'test/*.test.mjs'",
     "demo": "npx serve ."
   },
   "keywords": [
