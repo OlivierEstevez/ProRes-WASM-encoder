@@ -33,9 +33,9 @@ The test suite uses PNG sequences in `test/reference/` (TEST-01 through TEST-05)
 
 ### Development Server
 ```bash
-npm run demo    # Serves test/ on localhost:3000
+npm run demo    # Serves the repo root on localhost:3000 (demos live in test/)
 ```
-Two HTML demos: `test/index.html` (interactive canvas recording with P5.js) and `test/test_wasm_sequences.html` (batch profile comparison).
+Three HTML demos: `test/index.html` (interactive canvas recording with P5.js), `test/test_wasm_sequences.html` (batch profile comparison), and `test/mediabunny.html` (MediaBunny custom-encoder integration).
 
 ## Architecture
 

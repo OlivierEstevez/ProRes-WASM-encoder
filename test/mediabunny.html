@@ -22,13 +22,15 @@
     #log { margin-top: 16px; background: #0a0a0a; border: 1px solid #222; padding: 12px; height: 220px; overflow-y: auto; font-family: 'Space Mono', monospace; font-size: 11px; line-height: 1.7; }
     .ok { color: #7fd47f; } .err { color: #e06c6c; } .info { color: #8ab4f8; }
   </style>
-  <!-- Resolves the adapter's bare `import 'mediabunny'`. The CDN bundle is
-       used so the demo works with any static server (most refuse to serve
-       node_modules). In an app with a bundler, none of this is needed. -->
+  <!-- Resolves the adapter's bare `import 'mediabunny'` to the copy installed
+       by `npm install` (offline, version-locked to the devDependency). Uses
+       mediabunny's browser bundle — the package's default entry pulls in
+       node:fs. `npm run demo` serves the repo root so this path resolves.
+       In an app with a bundler, none of this is needed. -->
   <script type="importmap">
   {
     "imports": {
-      "mediabunny": "https://cdn.jsdelivr.net/npm/mediabunny@1/dist/bundles/mediabunny.min.mjs"
+      "mediabunny": "/node_modules/mediabunny/dist/bundles/mediabunny.mjs"
     }
   }
   </script>
