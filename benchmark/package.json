@@ -1,0 +1,21 @@
+{
+  "name": "prores-wasm-benchmark",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Benchmark harness comparing prores-wasm-encoder against native FFmpeg and ffmpeg.wasm",
+  "scripts": {
+    "footage": "node prepare-footage.mjs",
+    "bench:ours": "node bench-ours.mjs",
+    "bench:native": "node bench-native.mjs",
+    "bench:wasm": "node bench-ffmpegwasm.mjs",
+    "all": "node run-all.mjs",
+    "plot": "python3 plot.py"
+  },
+  "dependencies": {
+    "@ffmpeg/core": "0.12.10",
+    "@ffmpeg/core-mt": "0.12.10",
+    "@ffmpeg/ffmpeg": "0.12.15",
+    "@ffmpeg/util": "0.12.2"
+  }
+}
