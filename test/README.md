@@ -106,38 +106,6 @@ Alpha sequences (TEST-05) encode only 4444 and 4444XQ.
 
 ---
 
-## Test Categories
-
-### Solid Color Tests
-- `test_solid.*` - Validates basic encoding with uniform colors
-
-### Gradient Tests
-- `test_gradient.*` - Tests DCT on smooth transitions
-- `test_large_gradient.*` - Large gradient images
-
-### Edge Tests
-- `test_edge_*` - Tests block boundary handling
-- `test_h_edge_*` - Horizontal edge tests
-- `test_block_edge.*` - Block edge artifacts
-
-### Circle Tests
-- `test_circle_*` - Tests curved shapes
-- `test_color_circles.*` - Colored circle patterns
-
-### Quality Tests
-- `test_q1.*` - Quality setting 1 (lowest)
-- `test_q80.*` - Quality setting 80
-
-### Comparison Tests
-- `*_ffmpeg.*` - Files encoded with FFmpeg (reference)
-- `*_ours.*` - Files encoded with this encoder
-
-### Debug Traces
-- `trace_ac_encoding` - Debug AC coefficient encoding
-- `trace_block` - Debug block processing
-- `trace_h_v_edge` - Debug horizontal/vertical edge handling
-- `trace_vlc` - Debug variable-length coding
-
 ## Building Tests
 
 ### Native Test Executables

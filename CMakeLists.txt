@@ -93,12 +93,6 @@ if(EMSCRIPTEN)
 
     add_executable(prores-encoder.wasm ${ALL_SOURCES})
     set_target_properties(prores-encoder.wasm PROPERTIES LINK_FLAGS "${EMSCRIPTEN_LINK_FLAGS_STR}")
-
-else()
-    # Native build for testing
-    add_library(prores-encoder STATIC ${ENCODER_SOURCES} ${MUXER_SOURCES})
-
-    # Test executable
-    add_executable(prores-test test/test_native.c)
-    target_link_libraries(prores-test prores-encoder)
 endif()
+
+# Native test binaries are built directly with gcc — see test/README.md.
