@@ -1,0 +1,9 @@
+contender,environment,threads,profile,profileLabel,frames,runs,fps,realtimeX,encodeSecMedian,outMB,note
+ffmpeg.wasm,browser,1t,422hq,ProRes 422 HQ,30,1,3.23,0.11,9.2755,29.1,@ffmpeg/core
+ffmpeg.wasm,browser,8t,422hq,ProRes 422 HQ,30,1,22.52,0.75,1.3322,29.1,@ffmpeg/core-mt
+prores-wasm (ours),browser,1t,422hq,ProRes 422 HQ,30,1,3.57,0.12,8.3946,28.9,
+prores-wasm (ours),browser,8t,422hq,ProRes 422 HQ,30,1,24.68,0.82,1.2154,,8 workers
+ffmpeg.wasm,browser,1t,4444,ProRes 4444 (alpha),30,1,2.95,0.1,10.1651,154.3,@ffmpeg/core
+ffmpeg.wasm,browser,8t,4444,ProRes 4444 (alpha),30,1,18.29,0.61,1.6402,154.3,@ffmpeg/core-mt
+prores-wasm (ours),browser,1t,4444,ProRes 4444 (alpha),30,1,3.24,0.11,9.2594,155.3,
+prores-wasm (ours),browser,8t,4444,ProRes 4444 (alpha),30,1,23.2,0.77,1.2932,,8 workers
