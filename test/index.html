@@ -314,6 +314,14 @@
           <label>PNG Sequence</label>
           <input type="checkbox" id="pngSequence">
         </div>
+        <div class="control-group">
+          <label>Multi-threaded</label>
+          <input type="checkbox" id="parallel">
+        </div>
+        <div class="control-group">
+          <label>Worker Count</label>
+          <input type="number" id="workerCount" value="4" min="1" max="16">
+        </div>
       </div>
       <div class="actions">
         <div class="buttons">
@@ -338,6 +346,7 @@
   <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
   <script type="module">
     let createProResEncoder = null;
+    let createProResEncoderPool = null;
     let moduleLoadError = null;
 
     const log = (msg, type = '') => {
@@ -365,6 +374,11 @@
         const moduleUrl = new URL('../dist/prores-encoder.esm.js', import.meta.url);
         const mod = await import(moduleUrl.href);
         createProResEncoder = mod.default;
+        // Parallel encoding lives in its own entry point so the base
+        // library stays small; the browser shares the common chunk.
+        const parallelUrl = new URL('../dist/prores-encoder-parallel.esm.js', import.meta.url);
+        const parallelMod = await import(parallelUrl.href);
+        createProResEncoderPool = parallelMod.createProResEncoderPool;
         log('Encoder module loaded', 'info');
       } catch (err) {
         moduleLoadError = err;
@@ -600,6 +614,8 @@
         const totalFrames = parseInt(document.getElementById('frames').value);
         const range = document.getElementById('range').value;
         const capturePng = document.getElementById('pngSequence').checked;
+        const useParallel = document.getElementById('parallel').checked;
+        const workerCount = parseInt(document.getElementById('workerCount').value) || 4;
         document.documentElement.style.setProperty('--preview-aspect', `${width} / ${height}`);
 
         log('Initializing encoder...', 'info');
@@ -621,25 +637,40 @@
         ensureP5(width, height);
         currentTotalFrames = totalFrames;
 
-        // Initialize encoder
-        encoder = await createProResEncoder();
-        encoder.initialize({
+        // Initialize encoder (single-thread or parallel worker pool).
+        // Both expose addFrameFromCanvas / finalize / destroy; the pool's are
+        // async, so we await uniformly (awaiting a sync value is harmless).
+        const encoderConfig = {
           width,
           height,
           frameRateNum: fpsNum,
           frameRateDen: fpsDen,
           profile: profile,
           range
-        });
+        };
+        if (useParallel) {
+          if (!createProResEncoderPool) {
+            throw new Error('Parallel encoding unavailable (module missing createProResEncoderPool)');
+          }
+          log(`Parallel mode: ${workerCount} workers`, 'info');
+          encoder = await createProResEncoderPool({ ...encoderConfig, workers: workerCount });
+          log(`Pool ready with ${encoder.workerCount} worker(s)`, 'info');
+        } else {
+          encoder = await createProResEncoder();
+          encoder.initialize(encoderConfig);
+        }
 
         // Encode frames
         log('Encoding frames...', 'info');
         setStatus('Encoding...', 'encoding');
 
+        // Total render time = frame production + encoding, start to finalize.
+        const renderStart = performance.now();
+
         for (let frame = 0; frame < totalFrames && isRecording; frame++) {
           currentFrame = frame;
           p5Instance.redraw();
-          encoder.addFrameFromCanvas(p5Instance.canvas);
+          await encoder.addFrameFromCanvas(p5Instance.canvas);
 
           if (capturePng) {
             const blob = await canvasToPngBlob(p5Instance.canvas);
@@ -663,16 +694,24 @@
           startBtn.disabled = false;
           stopBtn.disabled = true;
           if (encoder) {
-            encoder.destroy();
+            await encoder.destroy();
             encoder = null;
           }
           return;
         }
 
         log('Finalizing MOV file...', 'info');
-        movData = encoder.finalize();
-        encoder.destroy();
+        movData = await encoder.finalize();
+        const usedWorkers = useParallel ? encoder.workerCount : 0;
+        await encoder.destroy();
         encoder = null;
+
+        const renderMs = performance.now() - renderStart;
+        const perFrame = renderMs / totalFrames;
+        log(`Total render time: ${(renderMs / 1000).toFixed(2)} s ` +
+            `(${perFrame.toFixed(1)} ms/frame, ${(1000 / perFrame).toFixed(1)} fps) · ` +
+            `${useParallel ? `${usedWorkers} workers` : 'single-thread'}`,
+            'success');
 
         if (capturePng && pngFrames.length) {
           log(`Building PNG zip (${pngFrames.length} frames)...`, 'info');

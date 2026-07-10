@@ -2,12 +2,37 @@
 
 Instructions for building, testing, and contributing to the ProRes WASM encoder.
 
+## Project Structure
+
+```
+├── build/              # Docker + CMake build configuration
+├── dist/               # Built output (WASM + JS bundles)
+├── lib/                # JavaScript wrappers + TypeScript declarations
+│   ├── index.js        # Single-thread encoder (base entry point)
+│   ├── parallel.js     # Worker-pool encoder (`/parallel` entry point)
+│   ├── pool.js         # ProResEncoderPool (+ pool-worker.js worker body)
+│   ├── mediabunny.js   # MediaBunny custom encoder (`/mediabunny` entry point)
+│   └── wasm-loader.js  # Shared WASM module loader
+├── src/
+│   ├── encoder/        # ProRes encoder (DCT, VLC, quantization)
+│   ├── muxer/          # MOV container muxer
+│   └── wasm/           # Emscripten bindings
+├── benchmark/          # Encode-throughput benchmark harness (see benchmark/README.md)
+├── test/
+│   ├── src/            # Native C test sources
+│   ├── scripts/        # Test suite scripts
+│   ├── reference/      # PNG test sequences
+│   ├── *.test.mjs      # Node test runner suites
+│   └── suite-results/  # Quality metric reports
+└── third_party/        # stb_image.h
+```
+
 ## Prerequisites
 
-- **Docker** — Required for the Emscripten WASM build
+- **Docker**: Required for the Emscripten WASM build
 - **Node.js 18+** and **npm**
-- **gcc** — For native builds (optional, useful for debugging)
-- **FFmpeg** — For reference encoding and quality comparison (optional)
+- **gcc**: For native builds (optional, useful for debugging)
+- **FFmpeg**: For reference encoding and quality comparison (optional)
 
 ## Build Commands
 
@@ -19,7 +44,17 @@ npm run build:js      # Build JS wrapper with Rollup (ESM + CJS output)
 npm run build         # Build both WASM and JS
 ```
 
-The WASM build uses `build/Dockerfile` with CMake + Ninja. Output goes to `dist/` as a single-file module (WASM embedded in JS via `SINGLE_FILE=1`). Memory: 64MB initial, 2GB max.
+The WASM build uses `build/Dockerfile` with CMake + Ninja. The compiled core (`prores-encoder.core.wasm` + glue) lands in `dist/`. Memory: 64MB initial, up to 4GB max.
+
+`npm run build:js` (Rollup) then produces three published entry points, each in ESM + CJS:
+
+| Import path | Source | Purpose |
+|-------------|--------|---------|
+| `prores-wasm-encoder` | `lib/index.js` | Single-thread `ProResEncoder`. WASM inlined (`SINGLE_FILE`), one self-contained bundle. |
+| `prores-wasm-encoder/parallel` | `lib/parallel.js` | Frame-parallel `ProResEncoderPool` over Web Workers. Shares one compiled WASM Module with the workers (no per-worker recompile). |
+| `prores-wasm-encoder/mediabunny` | `lib/mediabunny.js` | `registerProResEncoder()` custom encoder for [MediaBunny](https://mediabunny.dev) (optional peer dependency). |
+
+See the [README](README.md) for the runtime API of each. The parallel and mediabunny bundles reuse the same core, so installing more than one entry point does not duplicate the WASM binary.
 
 ### Native Build (for debugging)
 
@@ -36,18 +71,25 @@ gcc -o test/binaries/test_native test/src/test_native.c \
 ```
 
 Other test sources in `test/src/`:
-- `test_profiles.c` — All 422 profiles
-- `test_4444_alpha.c` — Alpha encoding
-- `test_dct.c` / `test_vlc.c` — Unit tests
-- `test_png_sequences.c` — Batch encoder (uses `third_party/stb_image.h`)
+- `test_profiles.c`: All 422 profiles
+- `test_4444_alpha.c`: Alpha encoding
+- `test_dct.c` / `test_vlc.c`: Unit tests
+- `test_png_sequences.c`: Batch encoder (uses `third_party/stb_image.h`)
 
 ## Testing
 
 ### Node.js Tests
 
 ```bash
-npm test    # Runs test/test.js
+npm test    # Runs the built-in node test runner over test/*.test.mjs
 ```
+
+These exercise the built bundle end to end. `test/mediabunny.test.mjs` runs the
+same RGBA frames through both our own encoder+muxer and the full MediaBunny
+pipeline, demuxes each resulting `.mov`, and asserts the encoded packets are
+byte-identical, so the custom-encoder path stays in lockstep with the base API.
+It also checks the alpha-extraction fast path is byte-exact. Run `npm run build`
+first: the tests import from `dist/`.
 
 ### Full Test Suite
 
@@ -74,15 +116,40 @@ ffmpeg -i test/outputs/output.mov -vframes 1 -pix_fmt rgba decoded.png
 compare original.png decoded.png diff.png
 ```
 
+## Benchmarks
+
+`benchmark/` is a standalone harness (its own `package.json`) that measures
+encode throughput against native FFmpeg and ffmpeg.wasm. All encoders receive
+the same raw RGBA frames (the first 5s of Big Buck Bunny at 1080p), so the
+numbers reflect encoding only, at ProRes 422 HQ and 4444-with-alpha.
+
+```bash
+cd benchmark
+npm install
+npm run footage                        # decode BBB to raw frames (~1.2 GB, gitignored)
+node --no-warnings run-all.mjs         # full Node run (~15 min)
+node --no-warnings run-all.mjs --quick # smoke run (1 rep, 8 workers only)
+node summarize.mjs                     # refresh the tables in benchmark/README.md
+python3 plot.py                        # charts to benchmark/results/
+```
+
+It compares our single-thread encoder and worker pool (2/4/8 workers) against
+ffmpeg.wasm and native FFmpeg (software + VideoToolbox).
+
 ## Development Server
 
 ```bash
-npm run demo    # Serves test/ on localhost:3000
+npm run demo    # Serves the repo root on localhost:3000
 ```
 
-Two HTML demos:
-- `test/index.html` — Interactive canvas recording with P5.js
-- `test/test_wasm_sequences.html` — Batch profile comparison
+Serving the repo root lets the demos load the built encoder from `/dist` and
+their dependencies from `/node_modules` directly. Run `npm run build` and
+`npm install` first, then open one of:
+- `test/index.html`: Interactive canvas recording with P5.js
+- `test/test_wasm_sequences.html`: Batch profile comparison
+- `test/mediabunny.html`: Recording via the MediaBunny custom-encoder
+  integration (`prores-wasm-encoder/mediabunny`); resolves `mediabunny` from
+  the installed devDependency
 
 ## Architecture
 
@@ -96,7 +163,7 @@ JS API (lib/index.js)  →  WASM bindings (src/wasm/bindings.c)  →  C encoder 
 ┌─────────────────────────────────────────────────────────────────┐
 │  JavaScript API (lib/index.js)                                  │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │ ProResEncoder class                                       │   │
+│  │ ProResEncoder class                                      │   │
 │  │ - initialize(), addFrameRgba(), finalize(), destroy()    │   │
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
@@ -110,26 +177,30 @@ JS API (lib/index.js)  →  WASM bindings (src/wasm/bindings.c)  →  C encoder 
                               │
 ┌─────────────────────────────▼───────────────────────────────────┐
 │  WASM Module (C)                                                │
-│  ┌────────────────────┐    ┌────────────────────────────────┐  │
-│  │ ProRes Encoder      │    │ MOV Muxer                      │  │
-│  │ (src/encoder/)      │    │ (src/muxer/)                   │  │
-│  │ - DCT transform     │    │ - QuickTime container format   │  │
-│  │ - Quantization      │    │ - Sample tables                │  │
-│  │ - VLC coding        │    │ - Color metadata atoms         │  │
-│  └────────────────────┘    └────────────────────────────────┘  │
+│  ┌────────────────────┐    ┌────────────────────────────────┐   │
+│  │ ProRes Encoder     │    │ MOV Muxer                      │   │
+│  │ (src/encoder/)     │    │ (src/muxer/)                   │   │
+│  │ - DCT transform    │    │ - QuickTime container format   │   │
+│  │ - Quantization     │    │ - Sample tables                │   │
+│  │ - VLC coding       │    │ - Color metadata atoms         │   │
+│  └────────────────────┘    └────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**JS Wrapper (`lib/index.js`, `lib/index.d.ts`)** — `ProResEncoder` class manages WASM memory lifecycle: allocates an RGBA buffer once via `_prores_wasm_alloc`, copies frame data into WASM heap each frame, frees on destroy. Also exports helper functions (`downloadMov`, `movToBlob`, `movToObjectUrl`). Rollup bundles to ESM + CJS in `dist/`.
+### JS Wrapper (`lib/index.js`, `lib/index.d.ts`)
+`ProResEncoder` class manages WASM memory lifecycle: allocates an RGBA buffer once via `_prores_wasm_alloc`, copies frame data into WASM heap each frame, frees on destroy. Also exports helper functions (`downloadMov`, `movToBlob`, `movToObjectUrl`). Rollup bundles to ESM + CJS in `dist/`. `lib/parallel.js` (`ProResEncoderPool`) and `lib/mediabunny.js` (`registerProResEncoder`) build on this same core. See the entry-point table under [Build Commands](#build-commands). Because encoding is intra-only, frames are independent, so the pool distributes them across workers and produces byte-identical output.
 
-**WASM Bindings (`src/wasm/bindings.c`)** — `ProResWasmContext` wraps both encoder and muxer into a single opaque handle. Handles RGBA to YUV conversion internally (dispatches to `rgba_to_yuv422p10` or `rgba_to_yuva444p10` based on profile). Error codes: -1 (invalid args), -2 (encode failed), -3 (mux/OOM).
+### WASM Bindings (`src/wasm/bindings.c`)
+`ProResWasmContext` wraps both encoder and muxer into a single opaque handle. Handles RGBA to YUV conversion internally (dispatches to `rgba_to_yuv422p10` or `rgba_to_yuva444p10` based on profile). Error codes: -1 (invalid args), -2 (encode failed), -3 (mux/OOM).
 
-**C Encoder (`src/encoder/`)** — Based on FFmpeg's `proresenc_kostya.c`:
-- `prores_encoder.c` — Frame/picture headers, slice encoding, RGBA to YUV conversion, quantization matrices per profile
-- `prores_dct.c` — Integer Loeffler 8x8 FDCT (PASS1_BITS=1 for 32x DC gain)
-- `prores_vlc.c` — Rice/Golomb entropy coding, position-major AC encoding, custom ProRes scan order
+### C Encoder (`src/encoder/`)
+Based on FFmpeg's `proresenc_kostya.c`:
+- `prores_encoder.c`: Frame/picture headers, slice encoding, RGBA to YUV conversion, quantization matrices per profile
+- `prores_dct.c`: Integer Loeffler 8x8 FDCT (PASS1_BITS=1 for 32x DC gain)
+- `prores_vlc.c`: Rice/Golomb entropy coding, position-major AC encoding, custom ProRes scan order
 
-**MOV Muxer (`src/muxer/mov_muxer.c`)** — QuickTime container writer (sample tables, color metadata atoms). Sample array grows dynamically.
+### MOV Muxer (`src/muxer/mov_muxer.c`)
+QuickTime container writer (sample tables, color metadata atoms). Sample array grows dynamically.
 
 ## Encoding Pipeline
 
@@ -153,23 +224,3 @@ Key implementation details:
 - DCT must produce 32x DC gain. The FDCT uses 10-bit parameters (PASS1_BITS=1).
 - Quantization uses integer truncation (C division), not round-to-nearest.
 - DC offset: no pixel centering before DCT; subtract `0x4000` from raw DC in `encode_dcs`.
-
-## Project Structure
-
-```
-├── build/              # Docker + CMake build configuration
-├── dist/               # Built output (WASM + JS bundles)
-├── lib/                # JavaScript wrapper + TypeScript declarations
-│   ├── index.js
-│   └── index.d.ts
-├── src/
-│   ├── encoder/        # ProRes encoder (DCT, VLC, quantization)
-│   ├── muxer/          # MOV container muxer
-│   └── wasm/           # Emscripten bindings
-├── test/
-│   ├── src/            # Native C test sources
-│   ├── scripts/        # Test suite scripts
-│   ├── reference/      # PNG test sequences
-│   └── suite-results/  # Quality metric reports
-└── third_party/        # stb_image.h
-```

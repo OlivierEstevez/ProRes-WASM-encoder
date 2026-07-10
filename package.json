@@ -7,14 +7,34 @@
   "types": "dist/prores-encoder.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/prores-encoder.d.ts",
       "import": "./dist/prores-encoder.esm.js",
-      "require": "./dist/prores-encoder.js",
-      "types": "./dist/prores-encoder.d.ts"
+      "require": "./dist/prores-encoder.js"
+    },
+    "./parallel": {
+      "types": "./dist/prores-encoder-parallel.d.ts",
+      "import": "./dist/prores-encoder-parallel.esm.js",
+      "require": "./dist/prores-encoder-parallel.js"
+    },
+    "./mediabunny": {
+      "types": "./dist/prores-encoder-mediabunny.d.ts",
+      "import": "./dist/prores-encoder-mediabunny.esm.js"
+    }
+  },
+  "peerDependencies": {
+    "mediabunny": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "mediabunny": {
+      "optional": true
     }
   },
   "sideEffects": false,
   "files": [
     "dist",
+    "!dist/prores-encoder.wasm.js",
+    "!dist/prores-encoder.core.wasm",
+    "!dist/prores-worker.js",
     "LICENSE"
   ],
   "scripts": {
@@ -22,8 +42,9 @@
     "build:wasm": "./build/build.sh",
     "build:js": "rollup -c",
     "build": "npm run clean && npm run build:wasm && npm run build:js",
-    "test": "node test/test.js",
-    "demo": "npx serve test"
+    "prepublishOnly": "npm run build",
+    "test": "node --test 'test/*.test.mjs'",
+    "demo": "npx serve ."
   },
   "keywords": [
     "prores",
@@ -48,6 +69,7 @@
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^15.0.0",
     "@rollup/plugin-terser": "^0.4.4",
+    "mediabunny": "^1.50.7",
     "rollup": "^4.0.0"
   }
 }

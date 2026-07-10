@@ -1,0 +1,17 @@
+contender,environment,threads,profile,profileLabel,frames,runs,fps,fpsBest,realtimeX,encodeSecMedian,encodeSecBest,encodeSecStdev,outMB,mbps,note
+FFmpeg (native),native,sw-1core,422hq,ProRes 422 HQ,150,2,5.15,5.16,0.17,29.1146,29.0507,0.0904,145.5,233,
+FFmpeg (native),native,sw-allcores,422hq,ProRes 422 HQ,150,4,36.4,36.58,1.21,4.1208,4.1008,0.0154,145.5,233,
+FFmpeg (native),native,hw-vt,422hq,ProRes 422 HQ,150,4,282.17,283.66,9.41,0.5316,0.5288,0.0148,135,216,
+prores-wasm (ours),node,1t,422hq,ProRes 422 HQ,150,2,3.52,3.52,0.12,42.6175,42.6129,0.0065,144.5,231,
+prores-wasm (ours),node,2t,422hq,ProRes 422 HQ,150,4,6.91,6.95,0.23,21.7128,21.5834,0.1756,,,2 worker_threads
+prores-wasm (ours),node,4t,422hq,ProRes 422 HQ,150,4,13.56,13.58,0.45,11.058,11.0439,0.0354,,,4 worker_threads
+prores-wasm (ours),node,8t,422hq,ProRes 422 HQ,150,4,26.25,26.52,0.87,5.7153,5.6565,0.0535,,,8 worker_threads
+ffmpeg.wasm,wasm,1t,422hq,ProRes 422 HQ,150,2,3.26,3.27,0.11,46.0101,45.8922,0.1668,145.5,233,@ffmpeg/core single-thread
+FFmpeg (native),native,sw-1core,4444,ProRes 4444 (alpha),150,2,4.65,4.67,0.16,32.2281,32.1366,0.1294,769.4,1231,
+FFmpeg (native),native,sw-allcores,4444,ProRes 4444 (alpha),150,4,34.15,34.24,1.14,4.3929,4.381,0.0189,769.4,1231,
+FFmpeg (native),native,hw-vt,4444,ProRes 4444 (alpha),150,4,270.27,273.5,9.01,0.555,0.5484,0.0039,438.2,701,
+prores-wasm (ours),node,1t,4444,ProRes 4444 (alpha),150,2,3.31,3.31,0.11,45.3623,45.262,0.1418,774.3,1239,
+prores-wasm (ours),node,2t,4444,ProRes 4444 (alpha),150,4,6.57,6.57,0.22,22.833,22.8284,0.0178,,,2 worker_threads
+prores-wasm (ours),node,4t,4444,ProRes 4444 (alpha),150,4,12.74,12.74,0.42,11.7752,11.77,0.0047,,,4 worker_threads
+prores-wasm (ours),node,8t,4444,ProRes 4444 (alpha),150,4,24.64,24.72,0.82,6.0882,6.0688,0.0352,,,8 worker_threads
+ffmpeg.wasm,wasm,1t,4444,ProRes 4444 (alpha),150,2,3.02,3.02,0.1,49.7385,49.6576,0.1144,769.4,1231,@ffmpeg/core single-thread

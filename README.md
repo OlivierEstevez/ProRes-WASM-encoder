@@ -1,15 +1,17 @@
 # ProRes WASM Encoder
 
-A WebAssembly-based Apple ProRes encoder that encodes canvas frames to `.mov` files directly in the browser. No server required.
+A lightweight WebAssembly-based Apple ProRes encoder that encodes `.mov` files directly in the browser. No server required.
 
 ## Features
 
+- **Tiny**: The lightest possible way to get ProRes in a browser (97kb vs 32.3MB of ffmpeg.wasm)
 - **All ProRes Profiles**: Proxy, LT, Standard, HQ, 4444, and 4444 XQ
 - **Alpha Channel**: Full transparency support with 4444 profiles
-- **QuickTime .mov Output**: With any framerate or resolution
-- **Canvas Integration**: Encode directly from `HTMLCanvasElement` or `OffscreenCanvas`
-- **Professional Color**: Internal 10-bit YUV encoding with BT.709 color matrix
+- **Real .mov output**: With any framerate or resolution, compatible with any editing software
+- **Capture Canvas**: Encode directly from `HTMLCanvasElement` or `OffscreenCanvas`
 - **Pure WASM**: Runs entirely in the browser, no server-side processing
+- **Multi-threaded**: Optional frame-parallel encoding across Web Workers
+- **MediaBunny Compatible**: Drop-in custom encoder for [MediaBunny](https://mediabunny.dev)'s conversion and muxing pipelines
 
 ## Installation
 
@@ -48,11 +50,103 @@ downloadMov(movData, 'my-video.mov');
 encoder.destroy();
 ```
 
+## Multi-threaded Encoding
+
+ProRes is intra-only (every frame is independent) so frames encode in
+parallel across Web Workers (real threads) with **byte-identical output**
+to the single-thread encoder. **No SharedArrayBuffer or COOP/COEP headers
+required**, each worker holds its own WASM instance, and the main thread
+muxes the results in frame order. Scaling is near-linear with core count
+(measured ~6.4x on 8 workers for complex 1080p HQ).
+
+Multi-threaded encoding lives in its own entry point, so apps that don't
+use it never pay for it:
+
+```javascript
+import { createProResEncoderPool } from 'prores-wasm-encoder/parallel';
+import { ProResProfile } from 'prores-wasm-encoder';
+
+const pool = await createProResEncoderPool({
+  width: 1920,
+  height: 1080,
+  frameRate: 30,
+  profile: ProResProfile.HQ,
+  workers: 4,           // default: min(hardwareConcurrency, 8)
+});
+
+// Same frame methods as the single-thread encoder, but async
+for (let i = 0; i < frames.length; i++) {
+  await pool.addFrameRgba(frames[i]);   // backpressured
+}
+
+const mov = await pool.finalize();       // or finalizeToBlob()
+await pool.destroy();
+```
+
+Workers are spawned from an inlined Blob URL, so **no bundler configuration
+is required** (it works in Vite, webpack, esbuild, plain `<script>`, and
+CDN builds alike). The WASM binary ships and compiles exactly **once**: the
+compiled module is shared with every worker, so adding workers adds no
+download or compile cost. Requires Web Workers with module support
+(Chrome 80+, Safari 15+, Firefox 114+); where those are unavailable, use
+the single-thread `createProResEncoder()`.
+
+Streaming (`onFrameData`) and `finalizeToBlob()` work on the pool exactly as
+on the single-thread encoder, so long parallel recordings also stay within
+constant memory.
+
+## MediaBunny Integration
+
+This library can plug into [MediaBunny](https://mediabunny.dev)'s custom-encoder
+API, so any MediaBunny `Output` or `Conversion` targeting the `'prores'`
+codec encodes through it.
+
+```javascript
+import { Output, BufferTarget, MovOutputFormat, CanvasSource } from 'mediabunny';
+import { registerProResEncoder } from 'prores-wasm-encoder/mediabunny';
+
+registerProResEncoder(); // multi-threaded when Web Workers are available
+
+const output = new Output({
+  format: new MovOutputFormat(),
+  target: new BufferTarget(),
+});
+const source = new CanvasSource(canvas, {
+  codec: 'prores',
+  fullCodecString: 'apch',   // pick the variant by fourcc: apco, apcs, apcn, apch, ap4h, ap4x
+  bitrate: 100_000_000,
+});
+output.addVideoTrack(source, { frameRate: 30 });
+await output.start();
+
+for (let f = 0; f < totalFrames; f++) {
+  drawFrame(f);                      // your rendering code
+  await source.add(f / 30, 1 / 30);  // capture + encode
+}
+
+await output.finalize();
+// output.target.buffer is the finished .mov
+```
+
+`mediabunny` is an optional peer dependency (`npm install mediabunny`), and
+this entry point is ESM-only. Select the ProRes variant with
+`fullCodecString` (a ProRes fourcc), or omit it and MediaBunny infers one
+from `bitrate` and alpha settings. Encoded frames are identical to the ones
+this library's own muxer writes.
+
 ## API Reference
 
 ### `createProResEncoder(): Promise<ProResEncoder>`
 
 Creates and returns a new encoder instance. The WASM module is loaded automatically.
+
+### `createProResEncoderPool(options): Promise<ProResEncoderPool>`
+
+Imported from **`prores-wasm-encoder/parallel`**. Creates a multi-threaded,
+frame-parallel encoder pool (see [Multi-threaded Encoding](#multi-threaded-encoding)).
+Accepts the same options as `initialize()` plus `workers` (worker count).
+Frame-adding methods (`addFrameRgba`, `addFrameFromCanvas`,
+`addFrameFromImageData`) and `finalize()` / `finalizeToBlob()` are **async**.
 
 ### `ProResEncoder.initialize(options)`
 
@@ -159,30 +253,51 @@ encoder.initialize({
 });
 ```
 
-## Limits
+## Long Recordings
 
-- **WASM memory ceiling**: 2 GB — the maximum number of frames depends on resolution and profile
+Frame data never accumulates in WASM memory: each encoded frame is handed
+to JavaScript immediately, so encoder memory stays constant (~64 MB)
+regardless of recording length.
+
+- `finalize()` returns the file as one `Uint8Array` (simple, fine for
+  short recordings)
+- `finalizeToBlob()` returns a `Blob`: preferred for long recordings,
+  since Blob parts are browser-managed and need no single contiguous
+  allocation
+- For unbounded recordings, pass `onFrameData` to `initialize()` and
+  stream each chunk to disk (e.g. OPFS), then assemble
+  `[header, ...chunks, moov]` from `finalizeHeaders()`
+
+Files over 4 GB are written with 64-bit offsets (`co64` + large `mdat`)
+automatically.
 
 ## Browser Support
 
-- Chrome 89+
+- Chrome 91+
 - Firefox 89+
-- Safari 15+
-- Edge 89+
+- Safari 16.4+
+- Edge 91+
 
-Requires WebAssembly support.
+Requires WebAssembly with SIMD128 (universal in browsers since early 2023).
 
 ## Performance
 
-Approximate encoding speeds on modern hardware:
+This library **matches (and slightly beats) ffmpeg.wasm single-threaded, at
+a fraction of the size** (~36 KB vs ~10.2 MB gzipped, roughly 280× smaller).
 
-| Resolution | Profile | Speed |
-|------------|---------|-------|
-| 720p | HQ | ~15-20 fps |
-| 1080p | HQ | ~8-12 fps |
-| 4K | HQ | ~2-4 fps |
+**ProRes 422 HQ**
 
-> Speeds vary with CPU, profile, and content complexity.
+| Encoder | fps | vs real-time |
+|---------|----:|-------------:|
+| ffmpeg.wasm, 1 thread | 3.26 | 0.11× |
+| **this library, 1 thread** | **3.52** | 0.12× |
+| ffmpeg.wasm, 8 threads (browser) | 22.52 | 0.75× |
+| **this library, 8-worker pool** | **26.25** | 0.87× |
+| _native FFmpeg, software (all cores)_ | _36.4_ | _1.21×_ |
+
+> Measured on an Apple M1 Pro (10 cores), 1080p.
+
+See **[Benchmark](benchmark/README.md)**.
 
 ## Motivation
 

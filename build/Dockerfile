@@ -24,5 +24,6 @@ CMD ["bash", "-c", "\
     cd build-wasm && \
     emcmake cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release && \
     ninja && \
-    cp prores-encoder.wasm.js ../dist/ \
+    cp prores-encoder.wasm.js ../dist/ && \
+    cp prores-encoder.wasm.wasm ../dist/prores-encoder.core.wasm \
 "]

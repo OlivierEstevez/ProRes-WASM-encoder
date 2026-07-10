@@ -10,7 +10,6 @@ dist/
 test/outputs/
 test/diffs/
 test/binaries/
-test/dist
 
 # Test suite results
 test/suite-results/

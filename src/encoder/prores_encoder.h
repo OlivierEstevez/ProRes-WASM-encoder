@@ -80,7 +80,11 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config);
  *                  For YUV422P10: Y plane (w*h*2), U plane (w/2*h*2), V plane (w/2*h*2)
  *                  For YUV444P10: Y plane (w*h*2), U plane (w*h*2), V plane (w*h*2)
  *                  For YUVA444P10: + A plane (w*h*2)
- * @param out_data  Output buffer pointer (allocated by encoder, caller must free)
+ * @param out_data  Receives a pointer into the encoder's internal output
+ *                  buffer. Owned by the encoder — do NOT free. Contents are
+ *                  valid only until the next prores_encoder_encode_frame()
+ *                  or prores_encoder_destroy() call; copy it (e.g. into a
+ *                  muxer) before encoding the next frame.
  * @param out_size  Output size in bytes
  * @return          0 on success, negative on error
  */

@@ -26,16 +26,16 @@ Other test sources in `test/src/`: `test_profiles.c` (all 422 profiles), `test_4
 
 ### Test Suite
 ```bash
-npm test                              # Run test/test.js (Node.js)
+npm test                              # Run test/*.test.mjs (Node.js test runner)
 bash test/scripts/run_test_suite.sh   # Full suite: build, encode, FFmpeg compare, PSNR/SSIM reports
 ```
 The test suite uses PNG sequences in `test/reference/` (TEST-01 through TEST-05). Results go to `test/suite-results/` with per-sequence `metrics.json` and `report.md`. Configuration lives in `test/scripts/sequences.conf`.
 
 ### Development Server
 ```bash
-npm run demo    # Serves test/ on localhost:3000
+npm run demo    # Serves the repo root on localhost:3000 (demos live in test/)
 ```
-Two HTML demos: `test/index.html` (interactive canvas recording with P5.js) and `test/test_wasm_sequences.html` (batch profile comparison).
+Three HTML demos: `test/index.html` (interactive canvas recording with P5.js), `test/test_wasm_sequences.html` (batch profile comparison), and `test/mediabunny.html` (MediaBunny custom-encoder integration).
 
 ## Architecture
 

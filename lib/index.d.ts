@@ -41,6 +41,15 @@ export interface ProResEncoderOptions {
   profile?: ProResProfileType;
   /** Color range (default: "limited") */
   range?: 'full' | 'limited';
+  /**
+   * Streaming mode: called with each frame's encoded bytes instead of
+   * buffering them internally. Write the chunks to disk/OPFS in order and
+   * assemble the final file as [header, ...chunks, moov] via
+   * finalizeHeaders(). Memory usage stays constant regardless of
+   * recording length. finalize()/finalizeToBlob() are unavailable in
+   * this mode.
+   */
+  onFrameData?: (chunk: Uint8Array) => void;
 }
 
 /**
@@ -78,10 +87,24 @@ export declare class ProResEncoder {
   addFrameFromCanvas(canvas: HTMLCanvasElement | OffscreenCanvas): void;
 
   /**
-   * Finalize encoding and get the MOV file data
+   * Finalize encoding and get the MOV file data.
+   * Unavailable in streaming mode (onFrameData).
    * @returns MOV file data
    */
   finalize(): Uint8Array;
+
+  /**
+   * Finalize encoding and get the MOV file as a Blob. Preferred for long
+   * recordings (no single contiguous allocation of the whole file).
+   * Unavailable in streaming mode (onFrameData).
+   */
+  finalizeToBlob(): Blob;
+
+  /**
+   * Get the MOV header and moov box for streaming-mode assembly:
+   * the final file is [header, ...frame chunks in order, moov].
+   */
+  finalizeHeaders(): { header: Uint8Array; moov: Uint8Array };
 
   /**
    * Destroy the encoder and free resources
@@ -91,13 +114,16 @@ export declare class ProResEncoder {
 
 /**
  * Create a new ProRes encoder
+ *
+ * For frame-parallel encoding across Web Workers, see the
+ * 'prores-wasm-encoder/parallel' entry point.
  */
 export declare function createProResEncoder(): Promise<ProResEncoder>;
 
 /**
  * Save MOV data as a downloadable file
  */
-export declare function downloadMov(movData: Uint8Array, filename?: string): void;
+export declare function downloadMov(movData: Uint8Array | Blob, filename?: string): void;
 
 /**
  * Convert MOV data to a Blob

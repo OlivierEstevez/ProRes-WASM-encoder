@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "benchmark-server",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["benchmark/browser/serve.mjs"],
+      "port": 3210
+    }
+  ]
+}
