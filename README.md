@@ -22,7 +22,7 @@ npm install prores-wasm-encoder
 ## Quick Start
 
 ```javascript
-import { createProResEncoder, ProResProfile, downloadMov } from 'prores-wasm';
+import { createProResEncoder, ProResProfile, downloadMov } from 'prores-wasm-encoder';
 
 // Create encoder
 const encoder = await createProResEncoder();
@@ -236,7 +236,7 @@ Just pass the frame rate as a number:
 encoder.initialize({
   width: 1920,
   height: 1080,
-  framerate: 23.976,
+  frameRate: 23.976,
   profile: ProResProfile.HQ,
 })
 ```
