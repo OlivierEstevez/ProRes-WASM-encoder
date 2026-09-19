@@ -286,6 +286,14 @@ static const uint8_t* get_chroma_quant_matrix(ProResProfile profile)
 }
 
 /* Helper: Check if profile is 4:4:4 */
+/* Number of set bits in a small non-negative value */
+static int popcount_small(int v)
+{
+    int n = 0;
+    for (; v; v &= v - 1) n++;
+    return n;
+}
+
 static int is_444_profile(ProResProfile profile)
 {
     return profile == PRORES_PROFILE_4444 || profile == PRORES_PROFILE_4444XQ;
@@ -321,8 +329,12 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
     ctx->slice_mb_width = 1 << ctx->log2_slice_mb_width;  /* 8 MBs */
     ctx->slice_mb_height = 1 << ctx->log2_slice_mb_height; /* 1 MB */
 
-    /* Calculate slices per row and total slices */
-    ctx->slices_per_row = (ctx->mb_width + ctx->slice_mb_width - 1) / ctx->slice_mb_width;
+    /* Calculate slices per row and total slices. Like FFmpeg, a row holds
+     * full-width slices, then the remaining MBs split into power-of-two
+     * slices (e.g. 7 = 4 + 2 + 1): decoders derive this layout from
+     * log2_slice_mb_width, so a single odd-width slice is out of bounds. */
+    ctx->slices_per_row = (ctx->mb_width >> ctx->log2_slice_mb_width)
+                        + popcount_small(ctx->mb_width & (ctx->slice_mb_width - 1));
     ctx->num_slices = ctx->slices_per_row * ctx->mb_height;
     ctx->slice_mb_count = ctx->slice_mb_width;  /* MBs per slice (may be less for last slice in row) */
 
@@ -866,6 +878,35 @@ static void dct_slice_blocks(ProResEncoderContext* ctx,
     }
 }
 
+/* Position and width (in MBs) of slice s within a MB row. Full-width
+ * slices come first; the remainder uses descending powers of two,
+ * matching FFmpeg's `while (mb_width - x < mbs_per_slice) mbs_per_slice >>= 1`. */
+static void get_slice_geometry(const ProResEncoderContext *ctx, int s,
+                               int *slice_mb_x, int *slice_width)
+{
+    int full = ctx->mb_width >> ctx->log2_slice_mb_width;
+    if (s < full) {
+        *slice_mb_x = s << ctx->log2_slice_mb_width;
+        *slice_width = ctx->slice_mb_width;
+        return;
+    }
+    int x = full << ctx->log2_slice_mb_width;
+    int rem = ctx->mb_width - x;
+    int k = s - full;
+    for (int w = ctx->slice_mb_width >> 1; w > 0; w >>= 1) {
+        if (!(rem & w)) continue;
+        if (k-- == 0) {
+            *slice_mb_x = x;
+            *slice_width = w;
+            return;
+        }
+        x += w;
+    }
+    /* Unreachable for s < slices_per_row */
+    *slice_mb_x = x;
+    *slice_width = 0;
+}
+
 /* Viterbi trellis search across all slices in a MB row.
  * Matches FFmpeg's find_slice_quant algorithm:
  * - Tries q values from min_quant to max_quant
@@ -898,10 +939,8 @@ static void find_slice_quants(ProResEncoderContext *ctx, int mb_row)
 
     /* Forward pass: for each slice */
     for (int s = 0; s < slices; s++) {
-        int slice_mb_x = s * ctx->slice_mb_width;
-        int slice_width = ctx->slice_mb_width;
-        if (slice_mb_x + slice_width > ctx->mb_width)
-            slice_width = ctx->mb_width - slice_mb_x;
+        int slice_mb_x, slice_width;
+        get_slice_geometry(ctx, s, &slice_mb_x, &slice_width);
         mbs_so_far += slice_width;
 
         /* Cumulative bit budget (total bits allowed up through this slice) */
@@ -1420,10 +1459,8 @@ int prores_encoder_encode_frame(
     for (slice_y = 0; slice_y < ctx->mb_height; slice_y++) {
         /* Pass 1: DCT all blocks for this MB row */
         for (int s = 0; s < ctx->slices_per_row; s++) {
-            int slice_mb_x = s * ctx->slice_mb_width;
-            int slice_width = ctx->slice_mb_width;
-            if (slice_mb_x + slice_width > ctx->mb_width)
-                slice_width = ctx->mb_width - slice_mb_x;
+            int slice_mb_x, slice_width;
+            get_slice_geometry(ctx, s, &slice_mb_x, &slice_width);
 
             int16_t (*luma)[64] = (int16_t (*)[64])(ctx->row_luma_blocks + s * MAX_BLOCKS_PER_SLICE * 64);
             int16_t (*u)[64] = (int16_t (*)[64])(ctx->row_u_blocks + s * MAX_BLOCKS_PER_SLICE * 64);
@@ -1457,10 +1494,8 @@ int prores_encoder_encode_frame(
 
         /* Pass 3: Encode each slice using stored blocks + chosen quant */
         for (int s = 0; s < ctx->slices_per_row; s++) {
-            int slice_mb_x = s * ctx->slice_mb_width;
-            int slice_width = ctx->slice_mb_width;
-            if (slice_mb_x + slice_width > ctx->mb_width)
-                slice_width = ctx->mb_width - slice_mb_x;
+            int slice_mb_x, slice_width;
+            get_slice_geometry(ctx, s, &slice_mb_x, &slice_width);
 
             int16_t (*luma)[64] = (int16_t (*)[64])(ctx->row_luma_blocks + s * MAX_BLOCKS_PER_SLICE * 64);
             int16_t (*u)[64] = (int16_t (*)[64])(ctx->row_u_blocks + s * MAX_BLOCKS_PER_SLICE * 64);
