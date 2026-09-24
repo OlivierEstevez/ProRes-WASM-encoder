@@ -3,7 +3,7 @@
  * Requires the 'mediabunny' peer dependency.
  */
 
-import type { CustomVideoEncoder } from 'mediabunny';
+import { CustomVideoEncoder } from 'mediabunny';
 
 export { ProResProfile } from './prores-encoder';
 

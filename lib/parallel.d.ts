@@ -2,16 +2,16 @@
  * prores-wasm-encoder/parallel — frame-parallel encoding entry point.
  */
 
-import type { ProResEncoderOptions } from './prores-encoder';
+import type { ProResEncoderOptions, ProResBytes } from './prores-encoder';
 
 export { ProResProfile, ProfileNames } from './prores-encoder';
-export type { ProResProfileType, ProResEncoderOptions } from './prores-encoder';
+export type { ProResProfileType, ProResEncoderOptions, ProResBytes } from './prores-encoder';
 
 /**
  * Options for the frame-parallel encoder pool.
  */
 export interface ProResEncoderPoolOptions extends ProResEncoderOptions {
-  /** Number of worker threads. Default: min(hardwareConcurrency, 8). */
+  /** Number of worker threads (positive integer). Default: min(hardwareConcurrency, 8). */
   workers?: number;
 }
 
@@ -32,18 +32,23 @@ export declare class ProResEncoderPool {
   addFrameRgba(rgbaData: Uint8Array | Uint8ClampedArray): Promise<void>;
   /** Submit a frame from ImageData. */
   addFrameFromImageData(imageData: ImageData): Promise<void>;
-  /** Submit a frame from a canvas. */
+  /** Submit a frame from a canvas (2D, WebGL or WebGPU). The pixels are
+   * read during the call, before any waiting. */
   addFrameFromCanvas(canvas: HTMLCanvasElement | OffscreenCanvas): Promise<void>;
 
+  /** Wait until every submitted frame is encoded (and, in streaming mode,
+   * delivered via onFrameData). Doesn't finalize; more frames can follow. */
+  flush(): Promise<void>;
+
   /** Wait for all frames, then return the whole MOV file. */
-  finalize(): Promise<Uint8Array>;
+  finalize(): Promise<ProResBytes>;
   /** Wait for all frames, then return the MOV file as a Blob. */
   finalizeToBlob(): Promise<Blob>;
   /** Streaming mode: wait for all frames (delivered via onFrameData), then
    * return the header/moov to write around your chunks. */
-  finalizeStreaming(): Promise<{ header: Uint8Array; moov: Uint8Array }>;
+  finalizeStreaming(): Promise<{ header: ProResBytes; moov: ProResBytes }>;
   /** Get the header/moov segments (frames must already be flushed). */
-  finalizeHeaders(): { header: Uint8Array; moov: Uint8Array };
+  finalizeHeaders(): { header: ProResBytes; moov: ProResBytes };
 
   /** Terminate workers and free resources. */
   destroy(): Promise<void>;

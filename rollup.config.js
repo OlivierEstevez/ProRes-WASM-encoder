@@ -1,20 +1,28 @@
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import terser from '@rollup/plugin-terser';
-import { copyFileSync, mkdirSync, readFileSync } from 'fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 
+// Types ship twice: .d.ts for the CommonJS (UMD) files and .d.mts for the
+// ESM (.mjs) files, so TypeScript's node16/nodenext resolution sees the
+// right module format. In .d.mts, relative imports need the .mjs extension.
 function copyTypes() {
   return {
     name: 'copy-types',
     writeBundle() {
       const copies = [
-        ['lib/index.d.ts', 'dist/prores-encoder.d.ts'],
-        ['lib/parallel.d.ts', 'dist/prores-encoder-parallel.d.ts'],
-        ['lib/mediabunny.d.ts', 'dist/prores-encoder-mediabunny.d.ts'],
+        ['lib/index.d.ts', 'dist/prores-encoder'],
+        ['lib/parallel.d.ts', 'dist/prores-encoder-parallel'],
+        ['lib/mediabunny.d.ts', 'dist/prores-encoder-mediabunny'],
       ];
       for (const [src, dest] of copies) {
         mkdirSync(dirname(resolve(dest)), { recursive: true });
-        copyFileSync(resolve(src), resolve(dest));
+        const code = readFileSync(resolve(src), 'utf8');
+        writeFileSync(resolve(dest + '.d.ts'), code);
+        writeFileSync(
+          resolve(dest + '.d.mts'),
+          code.replace(/from '\.\/(prores-encoder[\w-]*)'/g, "from './$1.mjs'")
+        );
       }
     }
   };
@@ -62,7 +70,7 @@ function inlineWorker(workerFile) {
   };
 }
 
-const WORKER_FILE = 'dist/prores-worker.js';
+const WORKER_FILE = 'dist/prores-worker.mjs';
 
 const umd = (input, file, name, minify) => ({
   input,
@@ -87,20 +95,20 @@ export default [
     plugins: [nodeResolve(), terser()],
     external: []
   },
-  // ESM builds: both entries in one pass so shared code (Emscripten glue,
+  // ESM builds (.mjs): all entries in one pass so shared code (Emscripten glue,
   // embedded wasm, encoder class) lands in a single shared chunk instead of
   // being duplicated. Apps importing both entries load the shared chunk once.
   {
     input: {
-      'prores-encoder.esm': 'lib/index.js',
-      'prores-encoder-parallel.esm': 'lib/parallel.js',
-      'prores-encoder-mediabunny.esm': 'lib/mediabunny.js',
+      'prores-encoder': 'lib/index.js',
+      'prores-encoder-parallel': 'lib/parallel.js',
+      'prores-encoder-mediabunny': 'lib/mediabunny.js',
     },
     output: {
       dir: 'dist',
       format: 'es',
-      entryFileNames: '[name].js',
-      chunkFileNames: 'prores-core.js',
+      entryFileNames: '[name].mjs',
+      chunkFileNames: 'prores-core.mjs',
       sourcemap: true
     },
     plugins: [

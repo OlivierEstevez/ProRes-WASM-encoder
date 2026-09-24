@@ -1,6 +1,12 @@
 /**
  * ProRes WASM Encoder TypeScript Declarations
+ *
+ * Requires TypeScript 5.7+ (generic typed arrays: Uint8Array<ArrayBuffer>).
  */
+
+/** Bytes produced by the encoder. Always backed by a plain ArrayBuffer, so
+ * they can go straight into `new Blob([...])`. */
+export type ProResBytes = Uint8Array<ArrayBuffer>;
 
 /**
  * ProRes profile constants
@@ -39,7 +45,10 @@ export interface ProResEncoderOptions {
   frameRateDen?: number;
   /** ProRes profile (default: HQ) */
   profile?: ProResProfileType;
-  /** Color range (default: "limited") */
+  /**
+   * Color range (default: "limited"). "full" is accepted but not supported
+   * yet: output is always limited (TV) range and a warning is logged.
+   */
   range?: 'full' | 'limited';
   /**
    * Streaming mode: called with each frame's encoded bytes instead of
@@ -49,7 +58,7 @@ export interface ProResEncoderOptions {
    * recording length. finalize()/finalizeToBlob() are unavailable in
    * this mode.
    */
-  onFrameData?: (chunk: Uint8Array) => void;
+  onFrameData?: (chunk: ProResBytes) => void;
 }
 
 /**
@@ -82,7 +91,10 @@ export declare class ProResEncoder {
   addFrameFromImageData(imageData: ImageData): void;
 
   /**
-   * Add a frame directly from a canvas
+   * Add a frame directly from a canvas (2D, WebGL or WebGPU). The canvas
+   * backing store (canvas.width/height) must match the encoder size. For
+   * WebGL, call this in the same task as the draw, or create the context
+   * with preserveDrawingBuffer: true.
    */
   addFrameFromCanvas(canvas: HTMLCanvasElement | OffscreenCanvas): void;
 
@@ -91,7 +103,7 @@ export declare class ProResEncoder {
    * Unavailable in streaming mode (onFrameData).
    * @returns MOV file data
    */
-  finalize(): Uint8Array;
+  finalize(): ProResBytes;
 
   /**
    * Finalize encoding and get the MOV file as a Blob. Preferred for long
@@ -104,10 +116,11 @@ export declare class ProResEncoder {
    * Get the MOV header and moov box for streaming-mode assembly:
    * the final file is [header, ...frame chunks in order, moov].
    */
-  finalizeHeaders(): { header: Uint8Array; moov: Uint8Array };
+  finalizeHeaders(): { header: ProResBytes; moov: ProResBytes };
 
   /**
-   * Destroy the encoder and free resources
+   * Destroy the encoder and free resources. The encoder can't be reused
+   * afterwards.
    */
   destroy(): void;
 }

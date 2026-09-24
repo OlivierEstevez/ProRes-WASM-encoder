@@ -9,7 +9,7 @@
  * measures the encoder's parallel ceiling, not messaging overhead.
  */
 import { parentPort, workerData } from 'node:worker_threads';
-import { createProResEncoder } from '../dist/prores-encoder.esm.js';
+import { createProResEncoder } from '../dist/prores-encoder.mjs';
 
 const { framesSAB, counterSAB, meta, ourProfile } = workerData;
 const bpf = meta.bytesPerFrame;
