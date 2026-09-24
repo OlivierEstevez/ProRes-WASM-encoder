@@ -11,7 +11,7 @@ A lightweight WebAssembly-based Apple ProRes encoder that encodes `.mov` files d
 
 ## Features
 
-- **Tiny**: The lightest possible way to get ProRes in a browser (97kb vs 32.3MB of ffmpeg.wasm)
+- **Tiny**: The lightest possible way to get ProRes in a browser (38 KB gzipped vs 10.2 MB for ffmpeg.wasm)
 - **All ProRes Profiles**: Proxy, LT, Standard, HQ, 4444, and 4444 XQ
 - **Alpha Channel**: Full transparency support with 4444 profiles
 - **Real .mov output**: With any framerate or resolution, compatible with any editing software
@@ -389,7 +389,7 @@ Requires WebAssembly with SIMD128 (universal in browsers since early 2023).
 ## Performance
 
 This library **matches (and slightly beats) ffmpeg.wasm single-threaded, at
-a fraction of the size** (~36 KB vs ~10.2 MB gzipped, roughly 280× smaller).
+a fraction of the size** (38 KB vs 10.2 MB gzipped, about 270× smaller).
 
 **ProRes 422 HQ**
 
