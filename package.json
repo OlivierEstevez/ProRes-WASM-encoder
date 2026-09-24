@@ -1,25 +1,48 @@
 {
   "name": "prores-wasm-encoder",
-  "version": "0.3.1",
+  "version": "1.0.0",
   "description": "WebAssembly-based ProRes encoder for browser canvas encoding",
   "main": "dist/prores-encoder.js",
-  "module": "dist/prores-encoder.esm.js",
+  "module": "dist/prores-encoder.mjs",
   "types": "dist/prores-encoder.d.ts",
+  "typesVersions": {
+    "*": {
+      "parallel": [
+        "dist/prores-encoder-parallel.d.ts"
+      ],
+      "mediabunny": [
+        "dist/prores-encoder-mediabunny.d.ts"
+      ]
+    }
+  },
   "exports": {
     ".": {
-      "types": "./dist/prores-encoder.d.ts",
-      "import": "./dist/prores-encoder.esm.js",
-      "require": "./dist/prores-encoder.js"
+      "import": {
+        "types": "./dist/prores-encoder.d.mts",
+        "default": "./dist/prores-encoder.mjs"
+      },
+      "require": {
+        "types": "./dist/prores-encoder.d.ts",
+        "default": "./dist/prores-encoder.js"
+      }
     },
     "./parallel": {
-      "types": "./dist/prores-encoder-parallel.d.ts",
-      "import": "./dist/prores-encoder-parallel.esm.js",
-      "require": "./dist/prores-encoder-parallel.js"
+      "import": {
+        "types": "./dist/prores-encoder-parallel.d.mts",
+        "default": "./dist/prores-encoder-parallel.mjs"
+      },
+      "require": {
+        "types": "./dist/prores-encoder-parallel.d.ts",
+        "default": "./dist/prores-encoder-parallel.js"
+      }
     },
     "./mediabunny": {
-      "types": "./dist/prores-encoder-mediabunny.d.ts",
-      "import": "./dist/prores-encoder-mediabunny.esm.js"
-    }
+      "import": {
+        "types": "./dist/prores-encoder-mediabunny.d.mts",
+        "default": "./dist/prores-encoder-mediabunny.mjs"
+      }
+    },
+    "./package.json": "./package.json"
   },
   "peerDependencies": {
     "mediabunny": ">=1.0.0"
@@ -34,8 +57,9 @@
     "dist",
     "!dist/prores-encoder.wasm.js",
     "!dist/prores-encoder.core.wasm",
-    "!dist/prores-worker.js",
-    "LICENSE"
+    "!dist/prores-worker.mjs",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "clean": "rm -rf dist",
@@ -43,7 +67,9 @@
     "build:js": "rollup -c",
     "build": "npm run clean && npm run build:wasm && npm run build:js",
     "prepublishOnly": "npm run build",
-    "test": "node --test 'test/*.test.mjs'",
+    "test": "node --test --test-timeout=120000 'test/*.test.mjs'",
+    "test:browser": "node --test --test-timeout=300000 'test/browser/*.test.mjs'",
+    "test:all": "npm test && npm run test:browser",
     "demo": "npx serve ."
   },
   "keywords": [
@@ -64,12 +90,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/OlivierEstevez/ProRes-WASM-encoder"
+    "url": "git+https://github.com/OlivierEstevez/ProRes-WASM-encoder.git"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@rollup/plugin-node-resolve": "^15.0.0",
     "@rollup/plugin-terser": "^0.4.4",
     "mediabunny": "^1.50.7",
-    "rollup": "^4.0.0"
+    "playwright": "^1.63.0",
+    "rollup": "^4.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0"
   }
 }

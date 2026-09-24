@@ -81,15 +81,33 @@ Other test sources in `test/src/`:
 ### Node.js Tests
 
 ```bash
-npm test    # Runs the built-in node test runner over test/*.test.mjs
+npm test              # Node test runner over test/*.test.mjs
+npm run test:browser  # Vite + headless Chromium (Playwright) over test/browser/
 ```
 
-These exercise the built bundle end to end. `test/mediabunny.test.mjs` runs the
-same RGBA frames through both our own encoder+muxer and the full MediaBunny
-pipeline, demuxes each resulting `.mov`, and asserts the encoded packets are
-byte-identical, so the custom-encoder path stays in lockstep with the base API.
-It also checks the alpha-extraction fast path is byte-exact. Run `npm run build`
-first: the tests import from `dist/`.
+These exercise the built bundle end to end, so run `npm run build` first: the
+tests import from `dist/`. With `ffprobe` on your PATH, encoded files are also
+decoded and checked.
+
+- `test/encoder.test.mjs`: the single-thread encoder. Output paths, every
+  profile, awkward frame sizes and rates, option validation, lifecycle errors
+  and canvas readback.
+- `test/pool.test.mjs`: the worker pool on real Node threads. Packet-identical
+  output to the single-thread encoder, backpressure, error handling and cleanup.
+- `test/package.test.mjs`: packs the package as `npm publish` would, installs
+  the tarball, and checks every documented export (ESM and CommonJS) and the
+  types (`tsc --strict`, arethetypeswrong).
+- `test/mediabunny.test.mjs`: the MediaBunny pipeline produces packets
+  byte-identical to our own muxer, and alpha extraction is byte-exact.
+- `test/browser/`: installs the tarball into a Vite app and runs it in
+  Chromium: pool vs single-thread, WebGL canvases, 4444 alpha and MediaBunny.
+  Locally, `PLAYWRIGHT_CHANNEL=chrome` uses your installed Chrome instead of
+  downloading Playwright's Chromium.
+
+CI (`.github/workflows/ci.yml`) runs both suites on every push and pull request.
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which checks the tag
+matches `package.json`, runs everything again and publishes to npm with trusted
+publishing.
 
 ### Full Test Suite
 

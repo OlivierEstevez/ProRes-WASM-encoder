@@ -19,7 +19,7 @@ import {
 
 /** Single-thread: pure encode throughput + a full end-to-end .mov for size. */
 export async function runSingle(meta, profileKey, { reps = 5, save = false } = {}) {
-  const { createProResEncoder } = await import('../dist/prores-encoder.esm.js');
+  const { createProResEncoder } = await import('../dist/prores-encoder.mjs');
   const prof = PROFILES[profileKey];
   const frames = loadFramesBuffer(meta);
   const bpf = meta.bytesPerFrame;

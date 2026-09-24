@@ -201,7 +201,6 @@ struct ProResEncoderContext {
     int mb_width;            /* Width in macroblocks */
     int mb_height;           /* Height in macroblocks */
     int num_slices;          /* Total number of slices */
-    int slice_mb_count;      /* Macroblocks per slice */
     int slices_per_row;      /* Number of slices per macroblock row */
     int slice_mb_width;      /* MBs per slice width */
     int slice_mb_height;     /* MBs per slice height */
@@ -336,7 +335,6 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
     ctx->slices_per_row = (ctx->mb_width >> ctx->log2_slice_mb_width)
                         + popcount_small(ctx->mb_width & (ctx->slice_mb_width - 1));
     ctx->num_slices = ctx->slices_per_row * ctx->mb_height;
-    ctx->slice_mb_count = ctx->slice_mb_width;  /* MBs per slice (may be less for last slice in row) */
 
     /* Always use 10-bit internally, matching FFmpeg (avctx->bits_per_raw_sample = 10).
      * This ensures DCT coefficients fit in int16_t (max DC = 32 * 1023 = 32736). */

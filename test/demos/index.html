@@ -326,7 +326,7 @@
 
     (async () => {
       try {
-        const url = new URL('../../dist/prores-encoder.esm.js', import.meta.url);
+        const url = new URL('../../dist/prores-encoder.mjs', import.meta.url);
         const mod = await import(url.href);
         createProResEncoder = mod.default;
         log('Encoder module loaded', 'success');

@@ -1,0 +1,51 @@
+name: Release
+
+# Push a tag like v1.0.0 (or v1.1.0-rc.1) to build, test and publish to npm.
+# Publishes with npm trusted publishing (OIDC): no token or secret needed.
+# The package's trusted publisher on npmjs.com must name this repo and
+# this workflow file (release.yml).
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write # npm trusted publishing (OIDC) + provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - name: Check the tag matches package.json
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $version" >&2
+            exit 1
+          fi
+      - run: npm ci
+      - name: Install ffmpeg (decode checks)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Build (WASM via Docker + JS)
+        run: npm run build
+      - run: npm test
+      - name: Browser tests (Vite + Chromium)
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:browser
+      - name: Update npm (trusted publishing needs npm 11.5.1+)
+        run: npm install -g npm@latest
+      - name: Publish
+        # --ignore-scripts: the build above is the one that was tested.
+        # Trusted publishing adds provenance automatically.
+        run: |
+          tag=latest
+          case "$GITHUB_REF_NAME" in *-*) tag=next ;; esac
+          npm publish --access public --tag "$tag" --ignore-scripts

@@ -78,7 +78,7 @@ function pushRow(contender, threads, profileKey, samples, outBytes, note) {
 
 // ---- our library (pure encode, hot) ----
 async function benchOursSingle(profileKey) {
-  const { createProResEncoder } = await import(`${REPO}dist/prores-encoder.esm.js`);
+  const { createProResEncoder } = await import(`${REPO}dist/prores-encoder.mjs`);
   const prof = PROFILES[profileKey];
   const enc = await createProResEncoder();
   enc.initialize({ width: meta.width, height: meta.height, frameRate: meta.fps, profile: prof.ourProfile });
@@ -98,7 +98,7 @@ async function benchOursSingle(profileKey) {
 }
 
 async function benchOursPool(profileKey) {
-  const { createProResEncoderPool } = await import(`${REPO}dist/prores-encoder-parallel.esm.js`);
+  const { createProResEncoderPool } = await import(`${REPO}dist/prores-encoder-parallel.mjs`);
   const prof = PROFILES[profileKey];
   const pool = await createProResEncoderPool({
     width: meta.width, height: meta.height, frameRate: meta.fps, profile: prof.ourProfile, workers: POOL_WORKERS,

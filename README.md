@@ -1,6 +1,13 @@
-# ProRes WASM Encoder
+<div align="center">
 
-A lightweight WebAssembly-based Apple ProRes encoder that encodes `.mov` files directly in the browser. No server required.
+<img src="docs/github-banner.png" alt="ProRes WASM Encoder"/>
+
+A lightweight WebAssembly-based Apple ProRes encoder that encodes `.mov` files directly in the browser.<br> No server required.
+
+[![npm version](https://img.shields.io/npm/v/prores-wasm-encoder)](https://www.npmjs.com/package/prores-wasm-encoder)
+[![downloads](https://img.shields.io/npm/dm/prores-wasm-encoder)](https://www.npmjs.com/package/prores-wasm-encoder)
+
+</div>
 
 ## Features
 
@@ -18,6 +25,8 @@ A lightweight WebAssembly-based Apple ProRes encoder that encodes `.mov` files d
 ```bash
 npm install prores-wasm-encoder
 ```
+
+> TypeScript types are included and need TypeScript 5.7 or later.
 
 ## Quick Start
 
@@ -50,6 +59,31 @@ downloadMov(movData, 'my-video.mov');
 encoder.destroy();
 ```
 
+## Choosing an Encoder
+
+| | `createProResEncoder()` | `createProResEncoderPool()` |
+|---|---|---|
+| Import from | `prores-wasm-encoder` | `prores-wasm-encoder/parallel` |
+| Runs on | the calling thread | Web Workers |
+| Frame methods | synchronous | async, backpressured |
+| Use it for | Web Workers, Node, short clips | browser exports (recommended) |
+
+The single-thread encoder is synchronous: a tight export loop on the main
+thread freezes the page, progress UI included, until it finishes. In a
+browser, prefer the pool. If you use the single-thread encoder on the main
+thread, yield to the event loop every few frames:
+
+```javascript
+for (let i = 0; i < totalFrames; i++) {
+  drawFrame(canvas, i);
+  encoder.addFrameFromCanvas(canvas);
+  if (i % 4 === 3) await new Promise((r) => setTimeout(r, 0)); // let the UI update
+}
+```
+
+Both encoders produce byte-identical output and share the same frame and
+finalize methods.
+
 ## Multi-threaded Encoding
 
 ProRes is intra-only (every frame is independent) so frames encode in
@@ -75,8 +109,9 @@ const pool = await createProResEncoderPool({
 });
 
 // Same frame methods as the single-thread encoder, but async
-for (let i = 0; i < frames.length; i++) {
-  await pool.addFrameRgba(frames[i]);   // backpressured
+for (let i = 0; i < totalFrames; i++) {
+  drawFrame(canvas, i);
+  await pool.addFrameFromCanvas(canvas);  // backpressured
 }
 
 const mov = await pool.finalize();       // or finalizeToBlob()
@@ -89,7 +124,9 @@ CDN builds alike). The WASM binary ships and compiles exactly **once**: the
 compiled module is shared with every worker, so adding workers adds no
 download or compile cost. Requires Web Workers with module support
 (Chrome 80+, Safari 15+, Firefox 114+); where those are unavailable, use
-the single-thread `createProResEncoder()`.
+the single-thread `createProResEncoder()`. If your site sets a
+Content-Security-Policy, allow Blob workers with `worker-src blob:`;
+otherwise `createProResEncoderPool()` rejects with an error saying so.
 
 Streaming (`onFrameData`) and `finalizeToBlob()` work on the pool exactly as
 on the single-thread encoder, so long parallel recordings also stay within
@@ -134,7 +171,48 @@ this entry point is ESM-only. Select the ProRes variant with
 from `bitrate` and alpha settings. Encoded frames are identical to the ones
 this library's own muxer writes.
 
+## Canvas Sources
+
+`addFrameFromCanvas()` reads any `HTMLCanvasElement` or `OffscreenCanvas`:
+2D, WebGL, WebGL2 or WebGPU (p5.js `WEBGL`, three.js and so on).
+
+- **Size**: the canvas backing store (`canvas.width` × `canvas.height`)
+  must match the encoder's `width` × `height`, or the call throws. On
+  high-DPI screens the backing store is often larger than the CSS size.
+- **WebGL timing**: read the frame in the same task as the draw. The
+  pool reads the pixels as soon as you call `addFrameFromCanvas()`, before
+  it waits for anything, so `drawFrame(); await pool.addFrameFromCanvas(canvas)`
+  is safe. If you capture later, create the context with
+  `preserveDrawingBuffer: true`.
+- **Alpha**: 2D canvases store premultiplied alpha, so semi-transparent
+  pixels lose some precision on the way to 4444. For exact alpha, pass
+  straight (non-premultiplied) RGBA to `addFrameRgba()`.
+
+## Bundlers
+
+The WASM binary and the worker code are inlined into the JavaScript, so
+there are no extra files for a bundler to copy or serve. The test suite
+builds and runs the package with Vite.
+
+**Vite dev server:** if you load the encoder lazily
+(`await import('prores-wasm-encoder')`), Vite discovers it on first use,
+re-bundles, and reloads the page, which loses the export in progress.
+Pre-bundle it at startup:
+
+```javascript
+// vite.config.js
+export default {
+  optimizeDeps: {
+    include: ['prores-wasm-encoder', 'prores-wasm-encoder/parallel'],
+  },
+};
+```
+
 ## API Reference
+
+Invalid options, wrong-sized frames and calls in the wrong order (a frame
+after `finalize()`, anything after `destroy()`) throw an `Error` with a
+message that says what to fix.
 
 ### `createProResEncoder(): Promise<ProResEncoder>`
 
@@ -160,7 +238,8 @@ Initialize the encoder with the specified options:
 | `frameRateNum` | number | | Advanced: explicit numerator (overrides `frameRate` when both num and den are set) |
 | `frameRateDen` | number | | Advanced: explicit denominator (overrides `frameRate` when both num and den are set) |
 | `profile` | ProResProfile | `HQ` | ProRes profile to use |
-| `range` | string | `"limited"` | Color range: `"limited"` (TV/studio) or `"full"` |
+| `range` | string | `"limited"` | Color range. Only `"limited"` (TV/studio) is supported for now; `"full"` logs a warning and encodes limited range |
+| `onFrameData` | function | | Streaming mode: called with each encoded frame (`Uint8Array`) instead of buffering it. See [Long Recordings](#long-recordings) |
 
 ### `ProResEncoder.addFrameRgba(rgbaData)`
 
@@ -168,7 +247,8 @@ Add a frame from raw RGBA pixel data (`Uint8Array` or `Uint8ClampedArray`, must 
 
 ### `ProResEncoder.addFrameFromCanvas(canvas)`
 
-Add a frame directly from an `HTMLCanvasElement` or `OffscreenCanvas`.
+Add a frame directly from an `HTMLCanvasElement` or `OffscreenCanvas` (2D,
+WebGL or WebGPU). See [Canvas Sources](#canvas-sources).
 
 ### `ProResEncoder.addFrameFromImageData(imageData)`
 
@@ -176,7 +256,19 @@ Add a frame from an `ImageData` object (e.g., from `ctx.getImageData()`).
 
 ### `ProResEncoder.finalize(): Uint8Array`
 
-Finalize encoding and return the `.mov` file as a `Uint8Array`.
+Finalize encoding and return the `.mov` file as a `Uint8Array` (backed by a
+plain `ArrayBuffer`, so `new Blob([mov])` type-checks). An encoder
+finalizes once; create a new one for the next file.
+
+### `ProResEncoder.finalizeToBlob(): Blob`
+
+Like `finalize()`, but returns a `Blob` (`video/quicktime`). Preferred for
+long recordings.
+
+### `ProResEncoder.finalizeHeaders(): { header, moov }`
+
+Streaming mode (`onFrameData`) only: returns the bytes that go before and
+after your frame chunks. The file is `[header, ...chunks, moov]`.
 
 ### `ProResEncoder.destroy()`
 
@@ -190,6 +282,20 @@ Free all WASM memory and resources. Always call this when done encoding.
 | `width` | number | Encoder width |
 | `height` | number | Encoder height |
 | `initialized` | boolean | Whether the encoder is initialized |
+
+### `ProResEncoderPool`
+
+Returned by `createProResEncoderPool()`.
+
+| Member | Description |
+|--------|-------------|
+| `addFrameRgba(data)`, `addFrameFromCanvas(canvas)`, `addFrameFromImageData(imageData)` | Submit a frame. Resolve once the frame is accepted; await them to apply backpressure |
+| `flush()` | Wait until every submitted frame is encoded. More frames can follow |
+| `finalize()` | Wait for all frames, then resolve with the `.mov` as a `Uint8Array` |
+| `finalizeToBlob()` | Same, as a `Blob` |
+| `finalizeStreaming()` | Streaming mode: wait for all frames, then resolve with `{ header, moov }` |
+| `destroy()` | Terminate the workers. Always call it when done |
+| `frameCount`, `width`, `height`, `workerCount` | Read-only properties |
 
 ### Helper Functions
 
@@ -340,3 +446,4 @@ rights; see the SMPTE RDD 36 IP declarations.
 - Integer DCT derived from libjpeg's `jfdctint.c` (IJG License)
 - MOV container format based on Apple QuickTime File Format specification
 - Inspired by [h264-mp4-encoder](https://github.com/TrevorSundberg/h264-mp4-encoder) architecture and [mp4-wasm](https://github.com/mattdesl/mp4-wasm/?tab=readme-ov-file)
+- Logo Design by [Detetiive](https://x.com/Detetiive)

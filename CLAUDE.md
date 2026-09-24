@@ -7,10 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### WASM Build (requires Docker)
 ```bash
 npm run build:wasm    # Build WASM module using Docker + Emscripten (3.1.50)
-npm run build:js      # Build JS wrapper with Rollup (ESM + CJS output)
+npm run build:js      # Build JS wrapper with Rollup (ESM .mjs + UMD .js output)
 npm run build         # Build both WASM and JS
 ```
-The WASM build uses `build/Dockerfile` with CMake + Ninja. Output goes to `dist/` as a single-file module (WASM embedded in JS via `SINGLE_FILE=1`). Memory: 64MB initial, 2GB max.
+The WASM build uses `build/Dockerfile` with CMake + Ninja. It writes the Emscripten glue (`dist/prores-encoder.wasm.js`) and binary (`dist/prores-encoder.core.wasm`) separately (`SINGLE_FILE=0`); Rollup then inlines the binary once, as base64, and shares the compiled module with pool workers. Memory: 64MB initial, 4GB max.
 
 ### Native Build (for testing/debugging)
 ```bash
@@ -26,7 +26,8 @@ Other test sources in `test/src/`: `test_profiles.c` (all 422 profiles), `test_4
 
 ### Test Suite
 ```bash
-npm test                              # Run test/*.test.mjs (Node.js test runner)
+npm test                              # test/*.test.mjs: encoder, pool (worker_threads), package contract + types, MediaBunny
+npm run test:browser                  # test/browser: packed tarball in a Vite app, headless Chromium (Playwright)
 bash test/scripts/run_test_suite.sh   # Full suite: build, encode, FFmpeg compare, PSNR/SSIM reports
 ```
 The test suite uses PNG sequences in `test/reference/` (TEST-01 through TEST-05). Results go to `test/suite-results/` with per-sequence `metrics.json` and `report.md`. Configuration lives in `test/scripts/sequences.conf`.
@@ -45,7 +46,7 @@ WebAssembly-based Apple ProRes encoder. Three layers:
 JS API (lib/index.js)  →  WASM bindings (src/wasm/bindings.c)  →  C encoder + muxer
 ```
 
-**JS Wrapper (`lib/index.js`, `lib/index.d.ts`)** — `ProResEncoder` class manages WASM memory lifecycle: allocates an RGBA buffer once via `_prores_wasm_alloc`, copies frame data into WASM heap each frame, frees on destroy. Also exports `downloadMov()`, `movToBlob()`, `movToObjectUrl()` helpers. Rollup bundles to ESM + CJS (`dist/`).
+**JS Wrapper (`lib/index.js`, `lib/index.d.ts`)** — `ProResEncoder` class manages WASM memory lifecycle: allocates an RGBA buffer once via `_prores_wasm_alloc`, copies frame data into WASM heap each frame, frees on destroy. Also exports `downloadMov()`, `movToBlob()`, `movToObjectUrl()` helpers. Rollup bundles to ESM `.mjs` + UMD `.js` (`dist/`); the package also has `/parallel` (worker pool, `lib/parallel.js` + `lib/pool.js`) and `/mediabunny` (`lib/mediabunny.js`) entries. Option validation lives in `lib/options.js`, canvas readback (2D and WebGL) in `lib/canvas.js`.
 
 **WASM Bindings (`src/wasm/bindings.c`)** — `ProResWasmContext` wraps both encoder and muxer into a single opaque handle. Handles RGBA→YUV conversion internally (dispatches to `rgba_to_yuv422p10` or `rgba_to_yuva444p10` based on profile). Error codes: -1 (invalid args), -2 (encode failed), -3 (mux/OOM).
 
@@ -78,6 +79,7 @@ These are hard-won lessons — violating any of these causes subtle visual corru
 - **Bit depth**: Always 10-bit internally (`bits_per_raw_sample=10`), even for 4444. 12-bit would overflow int16_t after DCT (32×4095 > 32767).
 - **4444 chroma block order**: Column-major (TL, BL, TR, BR), unlike luma which is row-major (TL, TR, BL, BR).
 - **Alpha encoding**: Uses per-pixel differential + Rice/Golomb run-length coding, NOT DCT+VLC like luma/chroma.
+- **Slice layout**: A MB row is full 8-MB slices, then the remainder as descending power-of-two slices (7 = 4+2+1), like FFmpeg. Decoders derive this from `log2_slice_mb_width`; one odd-width tail slice makes FFmpeg fail with "slice out of bounds" (e.g. 720 px wide).
 - **Color metadata**: FFmpeg writes primaries=2, transfer=2, matrix=2 ("unspecified") by default.
 
 ## Testing Against FFmpeg

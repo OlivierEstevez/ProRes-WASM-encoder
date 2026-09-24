@@ -22,24 +22,17 @@
  */
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert';
-import { existsSync } from 'node:fs';
 import {
   Output, BufferTarget, MovOutputFormat, VideoSampleSource, VideoSample,
   Input, ALL_FORMATS, BufferSource, EncodedPacketSink,
 } from 'mediabunny';
+import { requireDist, makeFrame } from './support/helpers.mjs';
 
-// This suite exercises the built artifacts. Fail loudly with an actionable
-// message instead of a confusing module-resolution error when they're absent.
-if (!existsSync(new URL('../dist/prores-encoder-mediabunny.esm.js', import.meta.url))) {
-  console.error(
-    '\n[mediabunny.test] Built dist not found. Run `npm run build` first ' +
-    '(or `npm run build:js` if dist/prores-encoder.core.wasm already exists).\n'
-  );
-  process.exit(1);
-}
-const { createProResEncoder } = await import('../dist/prores-encoder.esm.js');
+// This suite exercises the built artifacts.
+requireDist('prores-encoder-mediabunny.mjs', 'mediabunny.test');
+const { createProResEncoder } = await import('../dist/prores-encoder.mjs');
 const { registerProResEncoder, ProResVideoEncoder } =
-  await import('../dist/prores-encoder-mediabunny.esm.js');
+  await import('../dist/prores-encoder-mediabunny.mjs');
 
 const WIDTH = 128;
 const HEIGHT = 80;
@@ -54,33 +47,6 @@ const PROFILES = [
   { fourcc: 'ap4h', name: 'ProRes 4444', alpha: true, enum: 4 },
   { fourcc: 'ap4x', name: 'ProRes 4444 XQ', alpha: true, enum: 5 },
 ];
-
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0; a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/** Deterministic RGBA frames. Alpha profiles get varying (incl. very low)
- *  alpha so the alpha path is genuinely exercised. */
-function makeFrame(frameIndex, withAlpha) {
-  const rnd = mulberry32(0x1234 + frameIndex * 977);
-  const buf = new Uint8Array(WIDTH * HEIGHT * 4);
-  for (let y = 0; y < HEIGHT; y++) {
-    for (let x = 0; x < WIDTH; x++) {
-      const i = (y * WIDTH + x) * 4;
-      buf[i]     = (x * 2 + frameIndex * 10 + (rnd() * 40)) & 0xff;
-      buf[i + 1] = (y * 3 + frameIndex * 5 + (rnd() * 40)) & 0xff;
-      buf[i + 2] = ((x + y) + frameIndex * 7 + (rnd() * 40)) & 0xff;
-      buf[i + 3] = withAlpha ? ((x * 2 + y) & 0xff) : 255; // straight alpha
-    }
-  }
-  return buf;
-}
 
 /** Path A: our own encoder + our own muxer → .mov bytes. */
 async function encodeWithOwnMuxer(profileEnum, frames) {
@@ -146,7 +112,7 @@ describe('MediaBunny integration — bit-identical muxing', () => {
     const label = `${prof.fourcc} (${prof.name})${prof.alpha ? ' [alpha]' : ''}` +
       ' is byte-identical to our own muxer';
     it(label, async () => {
-      const frames = Array.from({ length: FRAMES }, (_, i) => makeFrame(i, prof.alpha));
+      const frames = Array.from({ length: FRAMES }, (_, i) => makeFrame(WIDTH, HEIGHT, i, prof.alpha));
       const movOwn = await encodeWithOwnMuxer(prof.enum, frames);
       const movMB = await encodeWithMediaBunny(prof.fourcc, frames);
       const pktsOwn = await extractPackets(movOwn);
