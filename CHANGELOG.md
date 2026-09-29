@@ -5,6 +5,24 @@ follows [Semantic Versioning](https://semver.org): from 1.0.0 on, the
 public API is what the TypeScript declarations (`.d.ts`) describe, and
 breaking changes to it only ship in a new major version.
 
+## [1.0.1] - 2026-09-29
+
+### Fixed
+
+- 8K frames (e.g. 7680x4320) now encode with the ProRes 4444 and 4444 XQ
+  profiles. Creating the encoder used to fail.
+- A frame too large for the encoder's output buffer now fails with an
+  error instead of returning bytes from outside the buffer.
+- The C encoder rejects unknown profiles instead of reading out of bounds.
+
+### Changed
+
+- The pool frees its frame buffers after `finalize()` and `destroy()`
+  (up to twice the worker count of full frames).
+- `destroy()` releases the encoder's WASM instance, even if you keep a
+  reference to the encoder.
+- The encoder no longer allocates memory for every frame.
+
 ## [1.0.0] - 2026-09-24
 
 ### Fixed
@@ -100,6 +118,7 @@ Tagged, but not published to npm; 0.3.1 ships its features.
 
 - Fixed 4444 alpha quality.
 
+[1.0.1]: https://github.com/OlivierEstevez/ProRes-WASM-encoder/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/OlivierEstevez/ProRes-WASM-encoder/compare/v0.3.1...v1.0.0
 [0.3.1]: https://github.com/OlivierEstevez/ProRes-WASM-encoder/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/OlivierEstevez/ProRes-WASM-encoder/compare/v0.2.3...v0.3.0

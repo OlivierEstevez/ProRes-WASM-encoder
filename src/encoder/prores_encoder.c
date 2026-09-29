@@ -222,6 +222,7 @@ struct ProResEncoderContext {
     uint32_t quants_recip[MAX_STORED_Q][64];        /* reciprocals of quants */
     uint32_t quants_chroma_recip[MAX_STORED_Q][64]; /* reciprocals of quants_chroma */
     int* slice_q;                               /* per-slice quant decisions */
+    int* slice_sizes;                           /* per-slice encoded sizes */
 
     /* Per-row sparse AC coefficient lists (built once per slice, reused by
      * every trellis estimation pass and the final encode) */
@@ -303,7 +304,8 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
     ProResEncoderContext* ctx;
     int plane_size;
 
-    if (!config || config->width <= 0 || config->height <= 0) {
+    if (!config || config->width <= 0 || config->height <= 0 ||
+        config->profile < PRORES_PROFILE_PROXY || config->profile > PRORES_PROFILE_4444XQ) {
         return NULL;
     }
 
@@ -387,6 +389,7 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
 
     /* Allocate per-slice quant decisions */
     ctx->slice_q = (int*)calloc(ctx->num_slices, sizeof(int));
+    ctx->slice_sizes = (int*)malloc(ctx->num_slices * sizeof(int));
 
     /* Allocate per-row DCT block storage */
     {
@@ -425,8 +428,9 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
         ctx->v_plane = (int16_t*)malloc(chroma_size);
     }
 
-    /* Output buffer - estimate based on bitrate */
-    ctx->output_capacity = (size_t)(ctx->padded_width * ctx->padded_height * profile_bpp[config->profile] / 8);
+    /* Output buffer - estimate based on bitrate (size_t math: the int
+     * product overflows for 8K 4444) */
+    ctx->output_capacity = (size_t)ctx->padded_width * ctx->padded_height * profile_bpp[config->profile] / 8;
     ctx->output_capacity += 1024;  /* Header overhead */
     ctx->output_buf = (uint8_t*)malloc(ctx->output_capacity);
 
@@ -443,7 +447,7 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
 
     if (!ctx->y_plane || !ctx->u_plane || !ctx->v_plane ||
         !ctx->output_buf || !ctx->slice_luma_buf || !ctx->slice_u_buf || !ctx->slice_v_buf ||
-        !ctx->slice_q || !ctx->row_luma_blocks || !ctx->row_u_blocks || !ctx->row_v_blocks ||
+        !ctx->slice_q || !ctx->slice_sizes || !ctx->row_luma_blocks || !ctx->row_u_blocks || !ctx->row_v_blocks ||
         !ctx->row_luma_block_counts || !ctx->row_chroma_block_counts || !ctx->trellis ||
         !ctx->sparse_coeff || !ctx->sparse_pos || !ctx->sparse_raster || !ctx->sparse_count) {
         prores_encoder_destroy(ctx);
@@ -1451,7 +1455,7 @@ int prores_encoder_encode_frame(
      * Pass 1: DCT all blocks for every slice in this row
      * Pass 2: Trellis search to find optimal per-slice quant
      * Pass 3: Encode each slice using stored DCT blocks + chosen quant */
-    int* slice_sizes = (int*)malloc(ctx->num_slices * sizeof(int));
+    int* slice_sizes = ctx->slice_sizes;
     int slice_idx = 0;
 
     for (slice_y = 0; slice_y < ctx->mb_height; slice_y++) {
@@ -1517,6 +1521,12 @@ int prores_encoder_encode_frame(
 
     flush_put_bits(&pb);
 
+    /* put_bits truncates at the buffer end but keeps counting, so a frame
+     * that outgrew the buffer would report a size past its end */
+    if (put_bytes_count(&pb) > ctx->output_capacity - data_start) {
+        return -2;
+    }
+
     /* Fill in slice size table (each entry is 16-bit slice length in bytes)
      * Per ProRes spec: "Slice index table consists of 16bit entries -
      * one for each slice - giving the length of the data for each slice" */
@@ -1525,8 +1535,6 @@ int prores_encoder_encode_frame(
         ctx->output_buf[picture_header_pos + 8 + i * 2] = (size_in_bytes >> 8) & 0xFF;
         ctx->output_buf[picture_header_pos + 8 + i * 2 + 1] = size_in_bytes & 0xFF;
     }
-
-    free(slice_sizes);
 
     /* Fill in picture data size (header + slices) at picture header bytes 1-4 (32-bit BE) */
     int slice_data_size = put_bytes_count(&pb);
@@ -1584,6 +1592,7 @@ void prores_encoder_destroy(ProResEncoderContext* ctx)
     free(ctx->slice_alpha_buf);
     free(ctx->alpha_pixel_buf);
     free(ctx->slice_q);
+    free(ctx->slice_sizes);
     free(ctx->row_luma_blocks);
     free(ctx->row_u_blocks);
     free(ctx->row_v_blocks);
