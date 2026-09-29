@@ -304,7 +304,8 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
     ProResEncoderContext* ctx;
     int plane_size;
 
-    if (!config || config->width <= 0 || config->height <= 0) {
+    if (!config || config->width <= 0 || config->height <= 0 ||
+        config->profile < PRORES_PROFILE_PROXY || config->profile > PRORES_PROFILE_4444XQ) {
         return NULL;
     }
 
