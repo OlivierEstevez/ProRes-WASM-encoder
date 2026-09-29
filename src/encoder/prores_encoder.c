@@ -425,8 +425,9 @@ ProResEncoderContext* prores_encoder_create(const ProResEncoderConfig* config)
         ctx->v_plane = (int16_t*)malloc(chroma_size);
     }
 
-    /* Output buffer - estimate based on bitrate */
-    ctx->output_capacity = (size_t)(ctx->padded_width * ctx->padded_height * profile_bpp[config->profile] / 8);
+    /* Output buffer - estimate based on bitrate (size_t math: the int
+     * product overflows for 8K 4444) */
+    ctx->output_capacity = (size_t)ctx->padded_width * ctx->padded_height * profile_bpp[config->profile] / 8;
     ctx->output_capacity += 1024;  /* Header overhead */
     ctx->output_buf = (uint8_t*)malloc(ctx->output_capacity);
 
