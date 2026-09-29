@@ -1518,6 +1518,13 @@ int prores_encoder_encode_frame(
 
     flush_put_bits(&pb);
 
+    /* put_bits truncates at the buffer end but keeps counting, so a frame
+     * that outgrew the buffer would report a size past its end */
+    if (put_bytes_count(&pb) > ctx->output_capacity - data_start) {
+        free(slice_sizes);
+        return -2;
+    }
+
     /* Fill in slice size table (each entry is 16-bit slice length in bytes)
      * Per ProRes spec: "Slice index table consists of 16bit entries -
      * one for each slice - giving the length of the data for each slice" */
