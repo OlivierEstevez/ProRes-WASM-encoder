@@ -5,6 +5,19 @@ follows [Semantic Versioning](https://semver.org): from 1.0.0 on, the
 public API is what the TypeScript declarations (`.d.ts`) describe, and
 breaking changes to it only ship in a new major version.
 
+## [1.0.2] - 2026-10-07
+
+### Fixed
+
+- Exports no longer look lighter than the source canvas in QuickTime
+  Player, Safari and Finder. The `colr` atom now tags the transfer
+  function as sRGB (`nclc 1-13-1`) instead of BT.709, for both the
+  built-in muxer and the MediaBunny integration (which wrote no `colr`
+  atom before). Encoded frames are unchanged.
+
+  Files you already color-corrected by eye in QuickTime will look darker
+  after re-exporting with this version.
+
 ## [1.0.1] - 2026-09-29
 
 ### Fixed
@@ -118,6 +131,7 @@ Tagged, but not published to npm; 0.3.1 ships its features.
 
 - Fixed 4444 alpha quality.
 
+[1.0.2]: https://github.com/OlivierEstevez/ProRes-WASM-encoder/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/OlivierEstevez/ProRes-WASM-encoder/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/OlivierEstevez/ProRes-WASM-encoder/compare/v0.3.1...v1.0.0
 [0.3.1]: https://github.com/OlivierEstevez/ProRes-WASM-encoder/compare/v0.3.0...v0.3.1
