@@ -201,7 +201,8 @@ window.runSuite = async () => {
     return out;
   } catch (err) {
     document.getElementById('status').textContent = 'error';
-    return { error: String(err && err.stack || err) };
+    // Firefox's err.stack omits the message, so include both.
+    return { error: `${err}\n${err && err.stack || ''}` };
   }
 };
 window.fixtureReady = true;
