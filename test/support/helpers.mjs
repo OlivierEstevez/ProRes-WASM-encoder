@@ -115,6 +115,22 @@ export function probeMov(bytes) {
 }
 
 /**
+ * Decode the first frame of a .mov with ffmpeg into straight RGBA bytes.
+ */
+export function decodeFirstFrameRgba(bytes) {
+  const dir = mkdtempSync(join(tmpdir(), 'prores-test-'));
+  const file = join(dir, 'in.mov');
+  try {
+    writeFileSync(file, bytes);
+    return new Uint8Array(execFileSync('ffmpeg', [
+      '-v', 'error', '-i', file, '-frames:v', '1', '-pix_fmt', 'rgba', '-f', 'rawvideo', '-',
+    ], { maxBuffer: 1 << 28 }));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
  * spawnWorker factory for createProResEncoderPool that runs each worker on
  * a real Node thread, exposing the Web Worker shape the pool expects.
  */

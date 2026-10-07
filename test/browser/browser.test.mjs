@@ -4,8 +4,9 @@
  * the Vite dev server, and runs the fixture in headless Chromium through
  * Playwright. Encoded files come back to Node and are checked with ffprobe.
  *
- * Run with `npm run test:browser` after `npm run build`. Uses Playwright's
- * Chromium; set PLAYWRIGHT_CHANNEL=chrome to use an installed Chrome.
+ * Run with `npm run test:browser` after `npm run build`. Runs in Playwright's
+ * Chromium, Firefox and WebKit; set BROWSERS=chromium (comma-separated) to
+ * pick engines, and PLAYWRIGHT_CHANNEL=chrome to use an installed Chrome.
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
@@ -15,18 +16,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build, preview, createServer } from 'vite';
-import { chromium } from 'playwright';
-import { requireDist, hasFfprobe, probeMov } from '../support/helpers.mjs';
+import { chromium, firefox, webkit } from 'playwright';
+import { requireDist, hasFfprobe, probeMov, decodeFirstFrameRgba } from '../support/helpers.mjs';
 
 requireDist('prores-encoder.mjs', 'browser.test');
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const FIXTURE = fileURLToPath(new URL('./app', import.meta.url));
 const FRAMES = 12;
+const W = 720;
+const H = 404;
+const ENGINES = { chromium, firefox, webkit };
+const BROWSERS = (process.env.BROWSERS || 'chromium,firefox,webkit').split(',');
 
 let work;
 let app;
-let browser;
+const browsers = {};
 
 before(async () => {
   work = mkdtempSync(join(tmpdir(), 'prores-browser-'));
@@ -43,15 +48,19 @@ before(async () => {
   // A real copy (not a symlink), so the dev server serves it from inside the app.
   cpSync(join(ROOT, 'node_modules', 'mediabunny'), join(app, 'node_modules', 'mediabunny'), { recursive: true });
 
-  browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || undefined });
+  for (const name of BROWSERS) {
+    browsers[name] = await ENGINES[name].launch(
+      name === 'chromium' ? { channel: process.env.PLAYWRIGHT_CHANNEL || undefined } : {}
+    );
+  }
 });
 
 after(async () => {
-  if (browser) await browser.close();
+  for (const b of Object.values(browsers)) await b.close();
   if (work) rmSync(work, { recursive: true, force: true });
 });
 
-async function runFixture(url) {
+async function runFixture(browser, url) {
   const page = await browser.newPage();
   const errors = [];
   let navigations = 0;
@@ -80,7 +89,10 @@ function checkRun(run) {
   assert.ok(r.webglPoolMatches2d, 'WebGL canvas encoded differently from 2D (pool)');
   assert.match(r.sizeMismatch, /canvas is 300x150 but the encoder is 720x404/);
 
+  checkColors(run);
+
   for (const [name, b64] of Object.entries(run.files)) {
+    if (name.startsWith('colors')) continue; // one-frame files, checked above
     const bytes = Buffer.from(b64, 'base64');
     assert.ok(bytes.length > 10_000, `${name} is too small`);
     if (!hasFfprobe()) continue;
@@ -96,24 +108,68 @@ function checkRun(run) {
   }
 }
 
-describe('browser (Chromium + Vite)', () => {
-  it('works from a production build (vite build + preview)', async () => {
-    await build({ root: app, logLevel: 'silent' });
-    const server = await preview({ root: app, logLevel: 'silent', preview: { port: 0, host: '127.0.0.1' } });
-    try {
-      checkRun(await runFixture(server.resolvedUrls.local[0]));
-    } finally {
-      await new Promise((r) => server.httpServer.close(r));
+/** Mean RGBA over a rectangle of a decoded frame. */
+function meanRgba(rgba, x0, x1) {
+  const sum = [0, 0, 0, 0];
+  let n = 0;
+  for (let y = 8; y < H - 8; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * W + x) * 4;
+      for (let c = 0; c < 4; c++) sum[c] += rgba[i + c];
+      n++;
     }
-  });
+  }
+  return sum.map((v) => v / n);
+}
 
-  it('works from the dev server with pre-bundled dependencies', async () => {
-    const server = await createServer({ root: app, logLevel: 'silent', server: { port: 0, host: '127.0.0.1' } });
-    await server.listen();
-    try {
-      checkRun(await runFixture(server.resolvedUrls.local[0]));
-    } finally {
-      await server.close();
-    }
+function assertClose(actual, expected, tol, what) {
+  const ok = actual.every((v, i) => Math.abs(v - expected[i]) <= tol);
+  assert.ok(ok, `${what}: got [${actual.map((v) => v.toFixed(1))}], expected [${expected.map((v) => v.toFixed(1))}]`);
+}
+
+/**
+ * The MediaBunny path must decode to the same colors as the standalone
+ * encoder fed from the same canvas: opaque colors always (catches R/B
+ * swaps), semi-transparent ones whenever the browser's VideoFrame itself
+ * is correct (catches premultiplied readback).
+ */
+function checkColors(run) {
+  if (!hasFfprobe()) return;
+  const ref = decodeFirstFrameRgba(Buffer.from(run.files.colorsReference, 'base64'));
+  const mb = decodeFirstFrameRgba(Buffer.from(run.files.colorsMediabunny, 'base64'));
+  const left = [16, W / 2 - 16];
+  const right = [W / 2 + 16, W - 16];
+
+  assertClose(meanRgba(ref, ...left), [230, 40, 20, 255], 2, 'reference opaque');
+  assertClose(meanRgba(ref, ...right), [200, 100, 50, 128], 2, 'reference semi-transparent');
+  assertClose(meanRgba(mb, ...left), meanRgba(ref, ...left), 2, 'MediaBunny opaque');
+
+  const frameOk = Math.abs(run.results.browserFrameHalf[0] - 200) <= 3;
+  if (frameOk) {
+    assertClose(meanRgba(mb, ...right), meanRgba(ref, ...right), 3, 'MediaBunny semi-transparent');
+  }
+}
+
+for (const name of BROWSERS) {
+  describe(`browser (${name} + Vite)`, () => {
+    it('works from a production build (vite build + preview)', async () => {
+      await build({ root: app, logLevel: 'silent' });
+      const server = await preview({ root: app, logLevel: 'silent', preview: { port: 0, host: '127.0.0.1' } });
+      try {
+        checkRun(await runFixture(browsers[name], server.resolvedUrls.local[0]));
+      } finally {
+        await new Promise((r) => server.httpServer.close(r));
+      }
+    });
+
+    it('works from the dev server with pre-bundled dependencies', async () => {
+      const server = await createServer({ root: app, logLevel: 'silent', server: { port: 0, host: '127.0.0.1' } });
+      await server.listen();
+      try {
+        checkRun(await runFixture(browsers[name], server.resolvedUrls.local[0]));
+      } finally {
+        await server.close();
+      }
+    });
   });
-});
+}

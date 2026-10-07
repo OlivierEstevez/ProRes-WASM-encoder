@@ -35,6 +35,10 @@ function draw2d(ctx, i) {
 /** Opaque solid colors, identical whether drawn by WebGL or 2D. */
 const SOLIDS = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [17, 136, 204], [250, 250, 5]];
 
+/** Colors for the MediaBunny color check: R and B differ so swaps show. */
+const COLOR_OPAQUE = '230 40 20';
+const COLOR_HALF = '200 100 50';
+
 function equalPackets(a, b) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
@@ -151,6 +155,40 @@ async function runSuite() {
   for (let i = 0; i < FRAMES; i++) { draw2d(ctx, i); await source.add(i / 30, 1 / 30); }
   await output.finalize();
   files.mediabunny = await toBase64(new Uint8Array(output.target.buffer));
+
+  // 6. MediaBunny colors match the standalone encoder (4444, one frame).
+  // Left half opaque, right half 50% alpha. The Node side decodes both
+  // files and compares; it catches R/B swaps and premultiplied alpha.
+  const colors = makeCanvas();
+  const cctx = colors.getContext('2d');
+  cctx.fillStyle = `rgb(${COLOR_OPAQUE})`;
+  cctx.fillRect(0, 0, W / 2, H);
+  cctx.fillStyle = `rgb(${COLOR_HALF} / 0.5)`;
+  cctx.fillRect(W / 2, 0, W / 2, H);
+
+  const encRef = await createProResEncoder();
+  encRef.initialize({ width: W, height: H, profile: ProResProfile.P4444 });
+  encRef.addFrameFromCanvas(colors);
+  files.colorsReference = await toBase64(encRef.finalize());
+  encRef.destroy();
+
+  const colorsOut = new Output({ format: new MovOutputFormat(), target: new BufferTarget() });
+  const colorsSource = new CanvasSource(colors, { codec: 'prores', fullCodecString: 'ap4h', bitrate: 100_000_000 });
+  colorsOut.addVideoTrack(colorsSource, { frameRate: 30 });
+  await colorsOut.start();
+  await colorsSource.add(0, 1 / 30);
+  await colorsOut.finalize();
+  files.colorsMediabunny = await toBase64(new Uint8Array(colorsOut.target.buffer));
+
+  // Some browsers premultiply when they create the VideoFrame itself
+  // (Chrome with CPU-backed canvases, e.g. headless). No readback can undo
+  // that, so the Node side only checks semi-transparent colors when the
+  // browser's own frame drawn back to a canvas is correct.
+  const vf = new VideoFrame(colors, { timestamp: 0 });
+  const probe = new OffscreenCanvas(W, H).getContext('2d', { willReadFrequently: true });
+  probe.drawImage(vf, 0, 0);
+  vf.close();
+  results.browserFrameHalf = [...probe.getImageData(W - 1, 0, 1, 1).data];
 
   return { results, files };
 }
