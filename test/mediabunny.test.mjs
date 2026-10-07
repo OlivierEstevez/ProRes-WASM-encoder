@@ -26,7 +26,7 @@ import {
   Output, BufferTarget, MovOutputFormat, VideoSampleSource, VideoSample,
   Input, ALL_FORMATS, BufferSource, EncodedPacketSink,
 } from 'mediabunny';
-import { requireDist, makeFrame } from './support/helpers.mjs';
+import { requireDist, makeFrame, readColr } from './support/helpers.mjs';
 
 // This suite exercises the built artifacts.
 requireDist('prores-encoder-mediabunny.mjs', 'mediabunny.test');
@@ -125,6 +125,13 @@ describe('MediaBunny integration — bit-identical muxing', () => {
       }
     });
   }
+
+  it('writes the same colr tag as our own muxer (BT.709, sRGB transfer)', async () => {
+    const frames = [makeFrame(WIDTH, HEIGHT, 0)];
+    const expected = { type: 'nclc', primaries: 1, transfer: 13, matrix: 1 };
+    assert.deepStrictEqual(readColr(await encodeWithOwnMuxer(3, frames)), expected);
+    assert.deepStrictEqual(readColr(await encodeWithMediaBunny('apch', frames)), expected);
+  });
 });
 
 describe('MediaBunny integration — alpha extraction', () => {

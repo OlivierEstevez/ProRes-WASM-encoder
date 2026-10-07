@@ -83,7 +83,7 @@ void* prores_wasm_create(
         .has_alpha = (profile >= 4),
         .color = {
             .primaries = 1,  /* BT.709 */
-            .transfer = 1,
+            .transfer = 13,  /* sRGB (IEC 61966-2-1): canvas pixels are sRGB-encoded */
             .matrix = 1
         },
         .full_range = 0
