@@ -49,9 +49,11 @@ before(async () => {
   cpSync(join(ROOT, 'node_modules', 'mediabunny'), join(app, 'node_modules', 'mediabunny'), { recursive: true });
 
   for (const name of BROWSERS) {
-    browsers[name] = await ENGINES[name].launch(
-      name === 'chromium' ? { channel: process.env.PLAYWRIGHT_CHANNEL || undefined } : {}
-    );
+    browsers[name] = await ENGINES[name].launch({
+      chromium: { channel: process.env.PLAYWRIGHT_CHANNEL || undefined },
+      // Software WebGL on GPU-less machines (CI), where Firefox otherwise has none.
+      firefox: { firefoxUserPrefs: { 'webgl.force-enabled': true } },
+    }[name] || {});
   }
 });
 
@@ -76,7 +78,7 @@ async function runFixture(browser, url) {
   }
 }
 
-function checkRun(run) {
+function checkRun(run, name) {
   assert.ok(!run.error, run.error);
   assert.deepStrictEqual(run.errors, [], 'page errors');
   assert.strictEqual(run.navigations, 1, 'the page reloaded during the run');
@@ -85,8 +87,14 @@ function checkRun(run) {
   assert.strictEqual(r.poolWorkers, 4);
   assert.strictEqual(r.packetCount, FRAMES);
   assert.ok(r.poolMatchesSingle, 'pool packets differ from single-thread');
-  assert.ok(r.webglMatches2d, 'WebGL canvas encoded differently from 2D (single-thread)');
-  assert.ok(r.webglPoolMatches2d, 'WebGL canvas encoded differently from 2D (pool)');
+  if (r.webglAvailable) {
+    assert.ok(r.webglMatches2d, 'WebGL canvas encoded differently from 2D (single-thread)');
+    assert.ok(r.webglPoolMatches2d, 'WebGL canvas encoded differently from 2D (pool)');
+  } else {
+    // Only Firefox may lack WebGL (GPU-less CI); Chromium and WebKit have software GL.
+    assert.strictEqual(name, 'firefox', 'WebGL unavailable');
+    console.log(`# ${name}: WebGL unavailable, skipped the WebGL canvas check`);
+  }
   assert.match(r.sizeMismatch, /canvas is 300x150 but the encoder is 720x404/);
 
   checkColors(run);
@@ -156,7 +164,7 @@ for (const name of BROWSERS) {
       await build({ root: app, logLevel: 'silent' });
       const server = await preview({ root: app, logLevel: 'silent', preview: { port: 0, host: '127.0.0.1' } });
       try {
-        checkRun(await runFixture(browsers[name], server.resolvedUrls.local[0]));
+        checkRun(await runFixture(browsers[name], server.resolvedUrls.local[0]), name);
       } finally {
         await new Promise((r) => server.httpServer.close(r));
       }
@@ -166,7 +174,7 @@ for (const name of BROWSERS) {
       const server = await createServer({ root: app, logLevel: 'silent', server: { port: 0, host: '127.0.0.1' } });
       await server.listen();
       try {
-        checkRun(await runFixture(browsers[name], server.resolvedUrls.local[0]));
+        checkRun(await runFixture(browsers[name], server.resolvedUrls.local[0]), name);
       } finally {
         await server.close();
       }
