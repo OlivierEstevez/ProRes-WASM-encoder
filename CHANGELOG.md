@@ -5,6 +5,23 @@ follows [Semantic Versioning](https://semver.org): from 1.0.0 on, the
 public API is what the TypeScript declarations (`.d.ts`) describe, and
 breaking changes to it only ship in a new major version.
 
+## [1.0.3] - 2026-10-07
+
+### Fixed
+
+- MediaBunny integration: canvas exports no longer swap red and blue in
+  Safari, and semi-transparent pixels in ProRes 4444 exports are no
+  longer too dark in Firefox. Both came from the browser's
+  `VideoFrame.copyTo` RGBA conversion. The adapter now checks it once and,
+  when it's unreliable, reads canvas frames through a 2D canvas instead.
+  The standalone encoder and the `/parallel` pool were not affected.
+
+  Known limit: Chrome with CPU-backed canvases (`willReadFrequently`, or
+  no GPU) and WebGL canvases in Safari premultiply alpha when the browser
+  creates the frame, before the encoder sees it. Opaque pixels are
+  correct. For semi-transparent 4444 output from those canvases, use
+  `addFrameFromCanvas` on the standalone encoder or the pool.
+
 ## [1.0.2] - 2026-10-07
 
 ### Fixed
@@ -131,6 +148,7 @@ Tagged, but not published to npm; 0.3.1 ships its features.
 
 - Fixed 4444 alpha quality.
 
+[1.0.3]: https://github.com/OlivierEstevez/ProRes-WASM-encoder/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/OlivierEstevez/ProRes-WASM-encoder/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/OlivierEstevez/ProRes-WASM-encoder/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/OlivierEstevez/ProRes-WASM-encoder/compare/v0.3.1...v1.0.0
