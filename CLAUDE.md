@@ -27,7 +27,7 @@ Other test sources in `test/src/`: `test_profiles.c` (all 422 profiles), `test_4
 ### Test Suite
 ```bash
 npm test                              # test/*.test.mjs: encoder, pool (worker_threads), package contract + types, MediaBunny
-npm run test:browser                  # test/browser: packed tarball in a Vite app, headless Chromium (Playwright)
+npm run test:browser                  # test/browser: packed tarball in a Vite app, Playwright Chromium + Firefox + WebKit (BROWSERS=chromium to narrow)
 bash test/scripts/run_test_suite.sh   # Full suite: build, encode, FFmpeg compare, PSNR/SSIM reports
 ```
 The test suite uses PNG sequences in `test/reference/` (TEST-01 through TEST-05). Results go to `test/suite-results/` with per-sequence `metrics.json` and `report.md`. Configuration lives in `test/scripts/sequences.conf`.

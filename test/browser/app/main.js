@@ -35,6 +35,10 @@ function draw2d(ctx, i) {
 /** Opaque solid colors, identical whether drawn by WebGL or 2D. */
 const SOLIDS = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [17, 136, 204], [250, 250, 5]];
 
+/** Colors for the MediaBunny color check: R and B differ so swaps show. */
+const COLOR_OPAQUE = '230 40 20';
+const COLOR_HALF = '200 100 50';
+
 function equalPackets(a, b) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
@@ -81,35 +85,39 @@ async function runSuite() {
   results.packetCount = pooled.length;
 
   // 2. WebGL canvas (getContext('2d') is null) encodes like a 2D canvas.
+  // Skipped when the browser has no WebGL (Firefox on a GPU-less CI runner).
   const glCanvas = makeCanvas();
   const gl = glCanvas.getContext('webgl');
-  const flat = makeCanvas();
-  const flatCtx = flat.getContext('2d', { willReadFrequently: true });
-  const fromGl = [];
-  const fromGlPool = [];
-  const from2d = [];
-  const encGl = await createProResEncoder();
-  encGl.initialize({ width: W, height: H, onFrameData: (c) => fromGl.push(c) });
-  const poolGl = await createProResEncoderPool({ width: W, height: H, workers: 2, onFrameData: (c) => fromGlPool.push(c) });
-  const enc2d = await createProResEncoder();
-  enc2d.initialize({ width: W, height: H, onFrameData: (c) => from2d.push(c) });
-  for (const [r, g, b] of SOLIDS) {
-    gl.clearColor(r / 255, g / 255, b / 255, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    encGl.addFrameFromCanvas(glCanvas); // same task as the draw
-    await poolGl.addFrameFromCanvas(glCanvas); // pixels read before the await
-    gl.clearColor(0, 0, 0, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    flatCtx.fillStyle = `rgb(${r} ${g} ${b})`;
-    flatCtx.fillRect(0, 0, W, H);
-    enc2d.addFrameFromCanvas(flat);
+  results.webglAvailable = !!gl;
+  if (gl) {
+    const flat = makeCanvas();
+    const flatCtx = flat.getContext('2d', { willReadFrequently: true });
+    const fromGl = [];
+    const fromGlPool = [];
+    const from2d = [];
+    const encGl = await createProResEncoder();
+    encGl.initialize({ width: W, height: H, onFrameData: (c) => fromGl.push(c) });
+    const poolGl = await createProResEncoderPool({ width: W, height: H, workers: 2, onFrameData: (c) => fromGlPool.push(c) });
+    const enc2d = await createProResEncoder();
+    enc2d.initialize({ width: W, height: H, onFrameData: (c) => from2d.push(c) });
+    for (const [r, g, b] of SOLIDS) {
+      gl.clearColor(r / 255, g / 255, b / 255, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      encGl.addFrameFromCanvas(glCanvas); // same task as the draw
+      await poolGl.addFrameFromCanvas(glCanvas); // pixels read before the await
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      flatCtx.fillStyle = `rgb(${r} ${g} ${b})`;
+      flatCtx.fillRect(0, 0, W, H);
+      enc2d.addFrameFromCanvas(flat);
+    }
+    await poolGl.flush();
+    await poolGl.destroy();
+    encGl.destroy();
+    enc2d.destroy();
+    results.webglMatches2d = equalPackets(fromGl, from2d);
+    results.webglPoolMatches2d = equalPackets(fromGlPool, from2d);
   }
-  await poolGl.flush();
-  await poolGl.destroy();
-  encGl.destroy();
-  enc2d.destroy();
-  results.webglMatches2d = equalPackets(fromGl, from2d);
-  results.webglPoolMatches2d = equalPackets(fromGlPool, from2d);
 
   // 3. A canvas sized by CSS only is rejected with a clear message.
   try {
@@ -152,6 +160,40 @@ async function runSuite() {
   await output.finalize();
   files.mediabunny = await toBase64(new Uint8Array(output.target.buffer));
 
+  // 6. MediaBunny colors match the standalone encoder (4444, one frame).
+  // Left half opaque, right half 50% alpha. The Node side decodes both
+  // files and compares; it catches R/B swaps and premultiplied alpha.
+  const colors = makeCanvas();
+  const cctx = colors.getContext('2d');
+  cctx.fillStyle = `rgb(${COLOR_OPAQUE})`;
+  cctx.fillRect(0, 0, W / 2, H);
+  cctx.fillStyle = `rgb(${COLOR_HALF} / 0.5)`;
+  cctx.fillRect(W / 2, 0, W / 2, H);
+
+  const encRef = await createProResEncoder();
+  encRef.initialize({ width: W, height: H, profile: ProResProfile.P4444 });
+  encRef.addFrameFromCanvas(colors);
+  files.colorsReference = await toBase64(encRef.finalize());
+  encRef.destroy();
+
+  const colorsOut = new Output({ format: new MovOutputFormat(), target: new BufferTarget() });
+  const colorsSource = new CanvasSource(colors, { codec: 'prores', fullCodecString: 'ap4h', bitrate: 100_000_000 });
+  colorsOut.addVideoTrack(colorsSource, { frameRate: 30 });
+  await colorsOut.start();
+  await colorsSource.add(0, 1 / 30);
+  await colorsOut.finalize();
+  files.colorsMediabunny = await toBase64(new Uint8Array(colorsOut.target.buffer));
+
+  // Some browsers premultiply when they create the VideoFrame itself
+  // (Chrome with CPU-backed canvases, e.g. headless). No readback can undo
+  // that, so the Node side only checks semi-transparent colors when the
+  // browser's own frame drawn back to a canvas is correct.
+  const vf = new VideoFrame(colors, { timestamp: 0 });
+  const probe = new OffscreenCanvas(W, H).getContext('2d', { willReadFrequently: true });
+  probe.drawImage(vf, 0, 0);
+  vf.close();
+  results.browserFrameHalf = [...probe.getImageData(W - 1, 0, 1, 1).data];
+
   return { results, files };
 }
 
@@ -163,7 +205,8 @@ window.runSuite = async () => {
     return out;
   } catch (err) {
     document.getElementById('status').textContent = 'error';
-    return { error: String(err && err.stack || err) };
+    // Firefox's err.stack omits the message, so include both.
+    return { error: `${err}\n${err && err.stack || ''}` };
   }
 };
 window.fixtureReady = true;
