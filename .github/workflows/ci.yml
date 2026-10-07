@@ -24,8 +24,8 @@ jobs:
       - name: Build (WASM via Docker + JS)
         run: npm run build
       - run: npm test
-      - name: Browser tests (Vite + Chromium)
+      - name: Browser tests (Vite + Chromium, Firefox, WebKit)
         if: matrix.node == 22
         run: |
-          npx playwright install --with-deps chromium
+          npx playwright install --with-deps chromium firefox webkit
           npm run test:browser
