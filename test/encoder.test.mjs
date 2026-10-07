@@ -11,7 +11,7 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert';
 import {
-  requireDist, makeFrame, concat, countDiffs, TIMESTAMP_BYTES, hasFfprobe, probeMov,
+  requireDist, makeFrame, concat, countDiffs, TIMESTAMP_BYTES, hasFfprobe, probeMov, readColr,
 } from './support/helpers.mjs';
 
 requireDist('prores-encoder.mjs', 'encoder.test');
@@ -110,6 +110,13 @@ describe('profiles, sizes and frame rates', () => {
       assert.strictEqual(Number(s.nb_read_frames), 2);
     });
   }
+
+  // Canvas pixels are sRGB-encoded. Tagging the transfer as BT.709 (1) makes
+  // AVFoundation brighten midtones (gray 128 shows as 139).
+  it('tags colr as BT.709 primaries/matrix with sRGB transfer', async () => {
+    const mov = await encode({ width: W, height: H }, [makeFrame(W, H, 0)]);
+    assert.deepStrictEqual(readColr(mov), { type: 'nclc', primaries: 1, transfer: 13, matrix: 1 });
+  });
 
   for (const [opts, expected] of [
     [{ frameRate: 23.976 }, '24000/1001'],

@@ -68,6 +68,21 @@ export function countDiffs(a, b) {
  */
 export const TIMESTAMP_BYTES = 24;
 
+/**
+ * Find the first `colr` atom and return its type and nclc/nclx code points,
+ * or null when the file has none.
+ */
+export function readColr(bytes) {
+  for (let i = 4; i + 14 <= bytes.length; i++) {
+    if (bytes[i] !== 0x63 || bytes[i + 1] !== 0x6f || bytes[i + 2] !== 0x6c || bytes[i + 3] !== 0x72) continue;
+    const type = String.fromCharCode(...bytes.subarray(i + 4, i + 8));
+    if (type !== 'nclc' && type !== 'nclx') continue;
+    const u16 = (o) => (bytes[i + o] << 8) | bytes[i + o + 1];
+    return { type, primaries: u16(8), transfer: u16(10), matrix: u16(12) };
+  }
+  return null;
+}
+
 let ffprobeAvailable;
 /** True when ffprobe is on PATH (optional, used for decode checks). */
 export function hasFfprobe() {

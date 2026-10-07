@@ -80,7 +80,7 @@ These are hard-won lessons — violating any of these causes subtle visual corru
 - **4444 chroma block order**: Column-major (TL, BL, TR, BR), unlike luma which is row-major (TL, TR, BL, BR).
 - **Alpha encoding**: Uses per-pixel differential + Rice/Golomb run-length coding, NOT DCT+VLC like luma/chroma.
 - **Slice layout**: A MB row is full 8-MB slices, then the remainder as descending power-of-two slices (7 = 4+2+1), like FFmpeg. Decoders derive this from `log2_slice_mb_width`; one odd-width tail slice makes FFmpeg fail with "slice out of bounds" (e.g. 720 px wide).
-- **Color metadata**: FFmpeg writes primaries=2, transfer=2, matrix=2 ("unspecified") by default.
+- **Color metadata**: The `colr` atom is `nclc 1-13-1` (BT.709 primaries/matrix, sRGB transfer) in both the C muxer and the MediaBunny adapter, because canvas pixels are sRGB-encoded. Transfer 1 (or 2) makes AVFoundation brighten midtones (gray 128 shows as 139). FFmpeg ignores the transfer when converting to RGB, so FFmpeg-based tests can't catch this; measure in AVFoundation. The ProRes frame header keeps 1-1-1 (RDD 36 doesn't list 13).
 
 ## Testing Against FFmpeg
 
